@@ -20,6 +20,7 @@ import OnExtensionUpdateAvailableService from "../extension/onExtensionUpdateAva
 import InformCallToActionPagemod from "../../pagemod/informCallToActionPagemod";
 import WorkerService from "../worker/workerService";
 import CopyToClipboardService from "../clipboard/copyToClipboardService";
+import PassbobDraftService from "../passbob/passbobDraftService";
 class PostLogoutService {
   /**
    * Execute all processes after a logout
@@ -32,6 +33,9 @@ class PostLogoutService {
     await StartLoopAuthSessionCheckService.clearAlarm();
     toolbarService.handleUserLoggedOut();
     resourceInProgressCacheService.reset();
+    // Passbob: forget the unsaved quickaccess form and the last visited page.
+    await PassbobDraftService.clear();
+    await browser.storage.session.remove("passbob.lastView");
     OnExtensionUpdateAvailableService.handleUserLoggedOut();
   }
 
