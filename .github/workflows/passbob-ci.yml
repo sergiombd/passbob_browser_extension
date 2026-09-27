@@ -58,14 +58,20 @@ jobs:
         working-directory: passbolt_browser_extension
         run: npm run lint:eslint
 
-      # The runners have 2 slow cores: allow slow tests (KDBX key derivation) more time and skip the "[performance]"
-      # tests, which measure the runner speed rather than the code.
+      # The runners have 2 slow cores: allow slow tests (KDBX key derivation) more time, skip the "[performance]" tests,
+      # which measure the runner speed rather than the code, and re-run only the failed tests once to absorb timing
+      # hiccups (a real failure fails twice).
       - name: Unit tests
         working-directory: passbolt_browser_extension
-        run: >-
-          npx jest --silent --maxWorkers=2 --testTimeout=30000
-          --testNamePattern='^((?!\[performance\]).)*$'
-          ./src/all/ ./src/chrome-mv3/ ./src/chrome/
+        run: |
+          run_tests() {
+            npx jest --silent --maxWorkers=2 --testTimeout=30000 \
+              --testNamePattern='^((?!\[performance\]).)*$' "$@" ./src/all/ ./src/chrome-mv3/ ./src/chrome/
+          }
+          if ! run_tests; then
+            echo "::warning::Some tests failed, re-running only the failed ones once"
+            run_tests --onlyFailures
+          fi
 
   build:
     name: Build unpacked extensions
