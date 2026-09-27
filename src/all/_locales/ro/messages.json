@@ -1,10 +1,10 @@
 {
   "appName": {
-    "message": "Passbolt - Manager open source de parole",
+    "message": "Passbob - Passbolt client (fork)",
     "description": "The application name of the extension, displayed in the web store. 45 characters max."
   },
   "appDescription": {
-    "message": "Extensia Passbolt pentru managerul de parole open source pentru echipe.",
+    "message": "Passbob: a friendlier fork of the Passbolt browser extension.",
     "description": "The description of the extension, displayed in the web store. 85 characters max."
   }
 }
