@@ -1,10 +1,10 @@
 {
   "appName": {
-    "message": "Passbolt - Менеджер паролей с открытым кодом",
+    "message": "Passbob - Passbolt client (fork)",
     "description": "The application name of the extension, displayed in the web store. 45 characters max."
   },
   "appDescription": {
-    "message": "Расширение Passbolt для менеджера паролей c открытым исходным кодом.",
+    "message": "Passbob: a friendlier fork of the Passbolt browser extension.",
     "description": "The description of the extension, displayed in the web store. 85 characters max."
   }
 }

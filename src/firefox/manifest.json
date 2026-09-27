@@ -1,13 +1,13 @@
 {
   "manifest_version": 2,
   "name": "__MSG_appName__",
-  "short_name": "passbolt",
+  "short_name": "passbob",
   "version": "5.16.1",
   "description": "__MSG_appDescription__",
   "default_locale": "en",
   "browser_specific_settings": {
     "gecko": {
-      "id": "passbolt@passbolt.com",
+      "id": "passbob@sergiombd.github.io",
       "strict_min_version": "140.0",
       "data_collection_permissions": {
         "required": ["none"]
@@ -29,7 +29,7 @@
         "dark": "webAccessibleResources/img/icons/icon-32.png",
         "size": 32
     }],
-    "default_title": "Passbolt Quickaccess",
+    "default_title": "Passbob",
     "default_popup": "webAccessibleResources/quickaccess.html?passbolt=quickaccess"
   },
   "commands": {
