@@ -58,9 +58,14 @@ jobs:
         working-directory: passbolt_browser_extension
         run: npm run lint:eslint
 
+      # The runners have 2 slow cores: allow slow tests (KDBX key derivation) more time and skip the "[performance]"
+      # tests, which measure the runner speed rather than the code.
       - name: Unit tests
         working-directory: passbolt_browser_extension
-        run: npx jest --silent --maxWorkers=2 ./src/all/ ./src/chrome-mv3/ ./src/chrome/
+        run: >-
+          npx jest --silent --maxWorkers=2 --testTimeout=30000
+          --testNamePattern='^((?!\[performance\]).)*$'
+          ./src/all/ ./src/chrome-mv3/ ./src/chrome/
 
   build:
     name: Build unpacked extensions
