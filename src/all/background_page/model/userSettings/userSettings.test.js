@@ -1,0 +1,159 @@
+/**
+ * Passbolt ~ Open source password manager for teams
+ * Copyright (c) Passbolt SARL (https://www.passbolt.com)
+ *
+ * Licensed under GNU Affero General Public License version 3 of the or any later version.
+ * For full copyright and license information, please see the LICENSE.txt
+ * Redistributions of files must retain the above copyright notice.
+ *
+ * @copyright     Copyright (c) Passbolt SA (https://www.passbolt.com)
+ * @license       https://opensource.org/licenses/AGPL-3.0 AGPL License
+ * @link          https://www.passbolt.com Passbolt(tm)
+ * @since         2.0.0
+ */
+import UserSettings from "./userSettings";
+
+jest.mock("../config", () => ({
+  getItem: (item) => item,
+  read: (item) => item,
+}));
+
+describe("User settings validation security token", () => {
+  const userSettings = new UserSettings();
+
+  it("should throw an error if security token is empty", () => {
+    const t = () => {
+      userSettings.validateSecurityToken(undefined);
+    };
+    expect(t).toThrow("A token cannot be empty.");
+  });
+
+  it("should throw an error if security token code is empty", () => {
+    const t = () => {
+      userSettings.validateSecurityToken({ test: "test" });
+    };
+    expect(t).toThrow("A token code cannot be empty.");
+  });
+
+  it("should throw an error if security token code is not ASCII chars", () => {
+    const t = () => {
+      userSettings.validateSecurityToken({ code: "🔥" });
+    };
+    expect(t).toThrow("The token code should only contain ASCII characters.");
+  });
+
+  it("should throw an error if security token code does not contain at least 3 characters", () => {
+    const t = () => {
+      userSettings.validateSecurityToken({ code: "12" });
+    };
+    expect(t).toThrow("The token code should only contain 3 characters.");
+  });
+
+  it("should throw an error if security token code contains more than 3 characters", () => {
+    const t = () => {
+      userSettings.validateSecurityToken({ code: "1223" });
+    };
+    expect(t).toThrow("The token code should only contain 3 characters.");
+  });
+
+  it("should throw an error if security token color is not set", () => {
+    const t = () => {
+      userSettings.validateSecurityToken({ code: "123" });
+    };
+    expect(t).toThrow("The token color cannot be empty.");
+  });
+
+  it("should throw an error if security token color is not hex color", () => {
+    const t = () => {
+      userSettings.validateSecurityToken({ code: "123", color: "#RRR" });
+    };
+    expect(t).toThrow("This is not a valid token color: #RRR");
+  });
+
+  it("should throw an error if security token text color empty", () => {
+    const t = () => {
+      userSettings.validateSecurityToken({ code: "123", color: "#000" });
+    };
+    expect(t).toThrow("The token text color cannot be empty.");
+  });
+
+  it("should throw an error if security token text color is not hex color", () => {
+    const t = () => {
+      userSettings.validateSecurityToken({ code: "123", color: "#66CC00", textcolor: "#RRR" });
+    };
+    expect(t).toThrow("This is not a valid token text color: #RRR.");
+  });
+
+  it("should return true if data is valid", () => {
+    const t = userSettings.validateSecurityToken({ code: "123", color: "#000", textcolor: "#FFF" });
+    expect(t).toBe(true);
+  });
+
+  it("should use a custom fetch strategy if provided.", async () => {
+    expect.assertions(2);
+    global.customApiClientFetch = () => ({
+      json: () => ({
+        header: {},
+        body: {},
+      }),
+      ok: true,
+    });
+    jest.spyOn(global, "customApiClientFetch");
+    const userSettings = new UserSettings();
+    userSettings.setDomain("https://passbolt.dev");
+    await expect(() => userSettings.sync()).not.toThrow();
+    expect(global.customApiClientFetch).toHaveBeenCalled();
+    delete global.customApiClientFetch;
+  });
+
+  describe("::validateDomain", () => {
+    it("should refuse any non compliant URL", () => {
+      const wrongUrls = [
+        "ftp://www.passbolt.com",
+        "http://www.passbolt.com/#test",
+        "http://www.passbolt.com/?test=1",
+        "http://www.passbolt.com/?test",
+        "htp://www.passbolt.com",
+        "htps://www.passbolt.com",
+        "https://username:password@www.passbolt.com",
+        "javascript:void(0)",
+        "setup/install/571bec7e-6cce-451d-b53a-f8c93e147228/5ea0fc9c-b180-4873-8e00-9457862e43e0",
+      ];
+      expect.assertions(wrongUrls.length);
+
+      const service = new UserSettings();
+      for (let i = 0; i < wrongUrls.length; i++) {
+        expect(() => service.validateDomain(wrongUrls[i])).toThrow();
+      }
+    });
+
+    it("should accept any compliant URL", () => {
+      const validUrls = [
+        "http://www.passbolt.com",
+        "https://www.passbolt.com",
+        "http://passbolt.com",
+        "https://passbolt.com",
+        "https://passbolt.dev",
+        "https://passbolt.dev:4443",
+        "https://passbolt",
+        "https://127.0.0.1",
+        "https://127.0.0.1/acme",
+        "https://127.0.0.1:4443",
+        "https://127.0.0.1:4443/acme",
+        "https://[0:0:0:0:0:0:0:1]",
+        "https://[0:0:0:0:0:0:0:1]:4443",
+        "https://[0:0:0:0:0:0:0:1]/acme",
+        "https://[0:0:0:0:0:0:0:1]:4443/acme",
+        "https://clould.passbolt.dev/acme",
+        "https://clould.passbolt.dev/acme",
+        "https://passbolt.dev/setup/install",
+      ];
+      expect.assertions(validUrls.length);
+
+      const service = new UserSettings();
+      for (let i = 0; i < validUrls.length; i++) {
+        expect(() => service.validateDomain(validUrls[i])).not.toThrow();
+      }
+    });
+  });
+});

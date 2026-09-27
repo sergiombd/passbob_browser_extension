@@ -1,0 +1,33 @@
+/**
+ * Passbolt ~ Open source password manager for teams
+ * Copyright (c) Passbolt SA (https://www.passbolt.com)
+ *
+ * Licensed under GNU Affero General Public License version 3 of the or any later version.
+ * For full copyright and license information, please see the LICENSE.txt
+ * Redistributions of files must retain the above copyright notice.
+ *
+ * @copyright     Copyright (c) Passbolt SA (https://www.passbolt.com)
+ * @license       https://opensource.org/licenses/AGPL-3.0 AGPL License
+ * @link          https://www.passbolt.com Passbolt(tm)
+ * @since         5.3.2
+ */
+
+/**
+ * The service aims to help get browser information.
+ */
+export default class BrowserService {
+  /**
+   * Returns true if the current browser is firefox.
+   * @returns {boolean}
+   */
+  static isFirefox() {
+    return browser.runtime.getURL("/").startsWith("moz-extension://");
+  }
+  /**
+   * Returns true if the current browser is Safari.
+   * @returns {boolean}
+   */
+  static isSafari() {
+    return browser.runtime.getURL("/").startsWith("safari-web-extension://");
+  }
+}

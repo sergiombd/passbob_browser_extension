@@ -1,0 +1,875 @@
+/**
+ * @jest-environment ./test/jest.custom-kdbx-environment
+ */
+/**
+ * Passbolt ~ Open source password manager for teams
+ * Copyright (c) Passbolt SA (https://www.passbolt.com)
+ *
+ * Licensed under GNU Affero General Public License version 3 of the or any later version.
+ * For full copyright and license information, please see the LICENSE.txt
+ * Redistributions of files must retain the above copyright notice.
+ *
+ * @copyright     Copyright (c) Passbolt SA (https://www.passbolt.com)
+ * @license       https://opensource.org/licenses/AGPL-3.0 AGPL License
+ * @link          https://www.passbolt.com Passbolt(tm)
+ * @since         4.10.0
+ */
+
+import { defaultApiClientOptions } from "passbolt-styleguide/src/shared/lib/apiClient/apiClientOptions.test.data";
+import { defaultAccountDto } from "../../../model/entity/account/accountEntity.test.data";
+import AccountEntity from "../../../model/entity/account/accountEntity";
+import { pgpKeys } from "passbolt-styleguide/test/fixture/pgpKeys/keys";
+import ImportResourcesService from "./ImportResourcesService";
+import ProgressService from "../../progress/progressService";
+import ImportResourcesFileEntity from "../../../model/entity/import/importResourcesFileEntity";
+import ResourceTypeService from "../../api/resourceType/resourceTypeService";
+import { resourceTypesCollectionDto } from "passbolt-styleguide/src/shared/models/entity/resourceType/resourceTypesCollection.test.data";
+import {
+  defaultImportResourceFileCSVDto,
+  defaultKDBXCSVData,
+  KdbxCsvFileTotpData,
+} from "../../../model/entity/import/importResourcesFileEntity.test.data";
+import MockExtension from "../../../../../../test/mocks/mockExtension";
+import { OpenpgpAssertion } from "../../../utils/openpgp/openpgpAssertions";
+import ResourceService from "../../api/resource/resourceService";
+import { defaultResourceDto } from "passbolt-styleguide/src/shared/models/entity/resource/resourceEntity.test.data";
+import DecryptPrivateKeyService from "../../crypto/decryptPrivateKeyService";
+import DecryptMessageService from "../../crypto/decryptMessageService";
+import BinaryConvert from "../../../utils/format/binaryConvert";
+import ImportError from "../../../error/importError";
+import EntityValidationError from "passbolt-styleguide/src/shared/models/entity/abstract/entityValidationError";
+import FolderApiService from "../../api/folder/folderApiService";
+import { defaultFolderDto } from "passbolt-styleguide/src/shared/models/entity/folder/folderEntity.test.data";
+import TagApiService from "../../api/tag/tagApiService";
+import { defaultTagDto } from "../../../model/entity/tag/tagEntity.test.data";
+import ExternalResourceEntity from "../../../model/entity/resource/external/externalResourceEntity";
+import { defaultExternalResourceImportMinimalDto } from "../../../model/entity/resource/external/externalResourceEntity.test.data";
+import ExternalFolderEntity from "../../../model/entity/folder/external/externalFolderEntity";
+import { minimalExternalFolderDto } from "../../../model/entity/folder/external/externalFolderEntity.test.data";
+import ResourceLocalStorage from "../../local_storage/resourceLocalStorage";
+import MetadataTypesSettingsEntity from "passbolt-styleguide/src/shared/models/entity/metadata/metadataTypesSettingsEntity";
+import {
+  defaultMetadataTypesSettingsV4Dto,
+  defaultMetadataTypesSettingsV50FreshDto,
+} from "passbolt-styleguide/src/shared/models/entity/metadata/metadataTypesSettingsEntity.test.data";
+import GetOrFindMetadataKeysService from "../../metadata/getOrFindMetadataKeysService";
+import { defaultMetadataKeysSettingsDto } from "passbolt-styleguide/src/shared/models/entity/metadata/metadataKeysSettingsEntity.test.data";
+import { defaultDecryptedSharedMetadataKeysDtos } from "passbolt-styleguide/src/shared/models/entity/metadata/metadataKeysCollection.test.data";
+import MetadataKeysCollection from "passbolt-styleguide/src/shared/models/entity/metadata/metadataKeysCollection";
+import MetadataKeysSettingsApiService from "../../api/metadata/metadataKeysSettingsApiService";
+import PassphraseStorageService from "../../session_storage/passphraseStorageService";
+import {
+  RESOURCE_TYPE_PASSWORD_AND_DESCRIPTION_SLUG,
+  RESOURCE_TYPE_PASSWORD_DESCRIPTION_TOTP_SLUG,
+  RESOURCE_TYPE_TOTP_SLUG,
+  RESOURCE_TYPE_V5_DEFAULT_SLUG,
+  RESOURCE_TYPE_V5_DEFAULT_TOTP_SLUG,
+  RESOURCE_TYPE_V5_TOTP_SLUG,
+} from "passbolt-styleguide/src/shared/models/entity/resourceType/resourceTypeSchemasDefinition";
+import GetOrFindMetadataSettingsService from "../../metadata/getOrFindMetadataSettingsService";
+import ResourcesCollection from "../../../model/entity/resource/resourcesCollection";
+import DecryptMetadataService from "../../metadata/decryptMetadataService";
+import { defaultPasswordExpirySettingsDtoFromApi } from "passbolt-styleguide/src/shared/models/entity/passwordExpiry/passwordExpirySettingsEntity.test.data";
+import PasswordExpirySettingsService from "../../api/passwordExpiry/passwordExpirySettingsService";
+import {
+  anonymousSiteSettings,
+  defaultCeSiteSettings,
+  defaultProSiteSettings,
+} from "passbolt-styleguide/src/shared/models/entity/siteSettings/siteSettingsEntity.test.data";
+import GetOrFindSiteSettingsService from "../../siteSettings/getOrFindSiteSettingsService";
+import SiteSettingsEntity from "passbolt-styleguide/src/shared/models/entity/siteSettings/siteSettingsEntity";
+import PassboltResponseEntity from "passbolt-styleguide/src/shared/models/entity/apiService/PassboltResponseEntity";
+import GetOrFindResourceTypesService from "../../resourceType/getOrFindResourceTypesService";
+import ResourceTypesCollection from "passbolt-styleguide/src/shared/models/entity/resourceType/resourceTypesCollection";
+import GetOrFindActiveSessionService from "../../activeSession/getOrFindActiveSessionService";
+import UserActiveSessionEntity from "passbolt-styleguide/src/shared/models/entity/session/userActiveSessionEntity";
+import { defaultUserActiveSessionDto } from "passbolt-styleguide/src/shared/models/entity/session/userActiveSessionEntity.test.data";
+
+jest.mock("../../../service/progress/progressService");
+
+beforeEach(async () => {
+  await MockExtension.withConfiguredAccount();
+  jest.clearAllMocks();
+});
+
+describe("ImportResourcesService", () => {
+  let importResourcesService,
+    worker,
+    importResourceFileCSV,
+    passphrase,
+    collection,
+    decryptMetadataService,
+    metadataKeys;
+
+  const account = new AccountEntity(defaultAccountDto({ user_id: pgpKeys.ada.userId }));
+  const apiClientOptions = defaultApiClientOptions();
+
+  /**
+   * Decrypt a secret for test
+   * @param {string} secret the secret
+   * @param {string} privateKey The private key
+   * @param {string} passphrase The passphrase
+   * @returns {Promise<string>}
+   */
+  const decryptSecret = async (secret, privateKey, passphrase) => {
+    const decryptedPrivateKey = await DecryptPrivateKeyService.decryptArmoredKey(privateKey, passphrase);
+    const secretMessage = await OpenpgpAssertion.readMessageOrFail(secret);
+    const signingKey = await OpenpgpAssertion.readKeyOrFail(account.userPublicArmoredKey);
+    return DecryptMessageService.decrypt(secretMessage, decryptedPrivateKey, [signingKey]);
+  };
+
+  beforeEach(async () => {
+    worker = {
+      port: {
+        emit: jest.fn(),
+      },
+    };
+    decryptMetadataService = new DecryptMetadataService(apiClientOptions, account);
+    importResourcesService = new ImportResourcesService(account, apiClientOptions, new ProgressService(worker, ""));
+    jest
+      .spyOn(GetOrFindSiteSettingsService.prototype, "getOrFind")
+      .mockImplementation(() => new SiteSettingsEntity(anonymousSiteSettings()));
+    collection = resourceTypesCollectionDto();
+    jest.spyOn(ResourceTypeService.prototype, "findAll").mockImplementation(() => collection);
+    jest
+      .spyOn(GetOrFindActiveSessionService.prototype, "getOrFind")
+      .mockImplementation(() => new UserActiveSessionEntity(defaultUserActiveSessionDto()));
+    importResourceFileCSV = new ImportResourcesFileEntity(defaultImportResourceFileCSVDto());
+    passphrase = pgpKeys.ada.passphrase;
+  });
+
+  describe("::importFile", () => {
+    beforeEach(async () => {
+      jest.spyOn(ResourceService.prototype, "create").mockImplementation(() => defaultResourceDto());
+      jest.spyOn(FolderApiService.prototype, "create").mockImplementation(() => defaultFolderDto());
+      jest
+        .spyOn(TagApiService.prototype, "updateResourceTags")
+        .mockResolvedValue(new PassboltResponseEntity({ header: {}, body: [defaultTagDto({ slug: "import-ref" })] }));
+      const metadataKeysDtos = defaultDecryptedSharedMetadataKeysDtos({ armored_key: pgpKeys.metadataKey.public });
+      metadataKeys = new MetadataKeysCollection(metadataKeysDtos);
+      const collection = resourceTypesCollectionDto();
+      jest.spyOn(ResourceTypeService.prototype, "findAll").mockImplementation(() => collection);
+      jest.spyOn(PassphraseStorageService, "get").mockImplementation(() => pgpKeys.ada.passphrase);
+      jest.spyOn(GetOrFindMetadataKeysService.prototype, "getOrFindAll").mockImplementation(() => metadataKeys);
+      jest
+        .spyOn(MetadataKeysSettingsApiService.prototype, "findSettings")
+        .mockImplementation(() => defaultMetadataKeysSettingsDto());
+    });
+    describe.each([
+      {
+        scenario: "Default content type v4",
+        metadataTypesSettings: defaultMetadataTypesSettingsV4Dto(),
+      },
+      {
+        scenario: "Default content type v5",
+        metadataTypesSettings: defaultMetadataTypesSettingsV50FreshDto(),
+      },
+    ])("Should parse the file", (test) => {
+      beforeEach(() => {
+        jest
+          .spyOn(GetOrFindMetadataSettingsService.prototype, "getOrFindTypesSettings")
+          .mockImplementationOnce(() => new MetadataTypesSettingsEntity(test.metadataTypesSettings));
+      });
+      it(`Should parse the file with password and description - <${test.scenario}>`, async () => {
+        expect.assertions(8);
+
+        const expectedSlug =
+          test.metadataTypesSettings.default_resource_types === "v4"
+            ? RESOURCE_TYPE_PASSWORD_AND_DESCRIPTION_SLUG
+            : RESOURCE_TYPE_V5_DEFAULT_SLUG;
+        const expectedResourceType = collection.find((resourceType) => resourceType.slug === expectedSlug);
+
+        expect(importResourceFileCSV.importResources.items.length).toEqual(0);
+
+        await importResourcesService.parseFile(importResourceFileCSV);
+        const result = await importResourcesService.importFile(importResourceFileCSV, passphrase);
+
+        expect(result.importResources.items.length).toEqual(2);
+        expect(result.importResourcesErrors.length).toEqual(0);
+        expect(result.importResourcesWarnings.length).toEqual(0);
+
+        const importedResources = result.importResources.items;
+
+        const secret1 = await decryptSecret(
+          result.importResources.items[0].secrets.items[0].data,
+          pgpKeys.ada.private,
+          pgpKeys.ada.passphrase,
+        );
+        const secret2 = await decryptSecret(
+          result.importResources.items[1].secrets.items[0].data,
+          pgpKeys.ada.private,
+          pgpKeys.ada.passphrase,
+        );
+        if (test.metadataTypesSettings.default_resource_types === "v4") {
+          expect(secret1).toEqual('{"password":"Password 1","description":"Description 1"}');
+          expect(secret2).toEqual('{"password":"Password 2","description":"Description 2"}');
+        } else {
+          expect(secret1).toEqual(
+            '{"object_type":"PASSBOLT_SECRET_DATA","password":"Password 1","description":"Description 1"}',
+          );
+          expect(secret2).toEqual(
+            '{"object_type":"PASSBOLT_SECRET_DATA","password":"Password 2","description":"Description 2"}',
+          );
+        }
+
+        //Remove encrypted secrets checked previously
+        delete importedResources[0]._secrets;
+        delete importedResources[1]._secrets;
+
+        const externalEntity1 = new ExternalResourceEntity(
+          defaultExternalResourceImportMinimalDto({
+            id: importedResources[0].id,
+            name: "Password 1",
+            resource_type_id: expectedResourceType.id,
+            folder_parent_path: "import-ref",
+            uris: ["https://url1.com"],
+            username: "Username 1",
+          }),
+        );
+
+        const externalEntity2 = new ExternalResourceEntity(
+          defaultExternalResourceImportMinimalDto({
+            id: importedResources[1].id,
+            name: "Password 2",
+            resource_type_id: expectedResourceType.id,
+            folder_parent_path: "import-ref",
+            uris: ["https://url1.com"],
+            username: "Username 2",
+            folder_parent_path_expected: "/Folder",
+          }),
+        );
+
+        expect(importedResources[0].toDto()).toEqual(externalEntity1.toDto());
+        expect(importedResources[1].toDto()).toEqual(externalEntity2.toDto());
+      });
+
+      it(`Should parse the file with password, description and totp - <${test.scenario}>`, async () => {
+        expect.assertions(5);
+
+        const expectedSlug =
+          test.metadataTypesSettings.default_resource_types === "v4"
+            ? RESOURCE_TYPE_PASSWORD_DESCRIPTION_TOTP_SLUG
+            : RESOURCE_TYPE_V5_DEFAULT_TOTP_SLUG;
+        const expectedResourceType = collection.find((resourceType) => resourceType.slug === expectedSlug);
+
+        importResourceFileCSV = new ImportResourcesFileEntity(
+          defaultImportResourceFileCSVDto({
+            file: btoa(BinaryConvert.toBinary(defaultKDBXCSVData())),
+          }),
+        );
+
+        await importResourcesService.parseFile(importResourceFileCSV);
+        const result = await importResourcesService.importFile(importResourceFileCSV, passphrase);
+        const importedResources = result.importResources.items;
+
+        expect(importResourceFileCSV.importResources.items.length).toEqual(1);
+        expect(result.importResourcesErrors.length).toEqual(0);
+        expect(result.importResourcesWarnings.length).toEqual(0);
+
+        const secret1 = await decryptSecret(
+          importResourceFileCSV.importResources.items[0].secrets.items[0].data,
+          pgpKeys.ada.private,
+          pgpKeys.ada.passphrase,
+        );
+
+        if (test.metadataTypesSettings.default_resource_types === "v4") {
+          expect(secret1).toEqual(
+            '{"password":"Password 1","description":"Description 1","totp":{"secret_key":"THISISASECRET","period":30,"digits":6,"algorithm":"SHA1"}}',
+          );
+        } else {
+          expect(secret1).toEqual(
+            '{"object_type":"PASSBOLT_SECRET_DATA","password":"Password 1","description":"Description 1","totp":{"secret_key":"THISISASECRET","period":30,"digits":6,"algorithm":"SHA1"}}',
+          );
+        }
+        //Remove encrypted secrets checked previously
+        delete importedResources[0]._secrets;
+
+        const externalEntity = new ExternalResourceEntity(
+          defaultExternalResourceImportMinimalDto({
+            id: importedResources[0].id,
+            name: "Password 1",
+            resource_type_id: expectedResourceType.id,
+            folder_parent_path: "import-ref",
+            uris: ["https://url1.com"],
+            username: "Username 1",
+            folder_parent_path_expected: "/Folder 1",
+          }),
+        );
+
+        expect(importedResources[0].toDto()).toEqual(externalEntity.toDto());
+      });
+
+      it(`Should parse the file with totp - <${test.scenario}>`, async () => {
+        expect.assertions(5);
+
+        const expectedSlug =
+          test.metadataTypesSettings.default_resource_types === "v4"
+            ? RESOURCE_TYPE_TOTP_SLUG
+            : RESOURCE_TYPE_V5_TOTP_SLUG;
+        const expectedResourceType = collection.find((resourceType) => resourceType.slug === expectedSlug);
+
+        importResourceFileCSV = new ImportResourcesFileEntity(
+          defaultImportResourceFileCSVDto({
+            file: btoa(BinaryConvert.toBinary(KdbxCsvFileTotpData)),
+          }),
+        );
+
+        await importResourcesService.parseFile(importResourceFileCSV);
+        const result = await importResourcesService.importFile(importResourceFileCSV, passphrase);
+        const importedResources = result.importResources.items;
+
+        expect(importResourceFileCSV.importResources.items.length).toEqual(1);
+        expect(result.importResourcesErrors.length).toEqual(0);
+        expect(result.importResourcesWarnings.length).toEqual(0);
+
+        const secret1 = await decryptSecret(
+          importResourceFileCSV.importResources.items[0].secrets.items[0].data,
+          pgpKeys.ada.private,
+          pgpKeys.ada.passphrase,
+        );
+
+        if (test.metadataTypesSettings.default_resource_types === "v4") {
+          expect(secret1).toEqual('{"totp":{"secret_key":"THISISASECRET","period":30,"digits":6,"algorithm":"SHA1"}}');
+        } else {
+          expect(secret1).toEqual(
+            '{"object_type":"PASSBOLT_SECRET_DATA","totp":{"secret_key":"THISISASECRET","period":30,"digits":6,"algorithm":"SHA1"}}',
+          );
+        }
+
+        //Remove encrypted secrets checked previously
+        delete importedResources[0]._secrets;
+
+        const externalEntity = new ExternalResourceEntity(
+          defaultExternalResourceImportMinimalDto({
+            id: importedResources[0].id,
+            name: "Password 1",
+            resource_type_id: expectedResourceType.id,
+            folder_parent_path: "import-ref",
+            uris: ["https://url1.com"],
+            username: "Username 1",
+            folder_parent_path_expected: "",
+          }),
+        );
+
+        expect(importedResources[0].toDto()).toEqual(externalEntity.toDto());
+      });
+
+      it(`Should parse the file with totp and description - <${test.scenario}>`, async () => {
+        expect.assertions(5);
+
+        const expectedSlug =
+          test.metadataTypesSettings.default_resource_types === "v4"
+            ? RESOURCE_TYPE_PASSWORD_DESCRIPTION_TOTP_SLUG
+            : RESOURCE_TYPE_V5_DEFAULT_TOTP_SLUG;
+        const expectedResourceType = collection.find((resourceType) => resourceType.slug === expectedSlug);
+
+        importResourceFileCSV = new ImportResourcesFileEntity(
+          defaultImportResourceFileCSVDto({
+            file: btoa(BinaryConvert.toBinary(defaultKDBXCSVData())),
+          }),
+        );
+
+        await importResourcesService.parseFile(importResourceFileCSV);
+        const result = await importResourcesService.importFile(importResourceFileCSV, passphrase);
+        const importedResources = result.importResources.items;
+
+        expect(importResourceFileCSV.importResources.items.length).toEqual(1);
+        expect(result.importResourcesErrors.length).toEqual(0);
+        expect(result.importResourcesWarnings.length).toEqual(0);
+
+        const secret1 = await decryptSecret(
+          importResourceFileCSV.importResources.items[0].secrets.items[0].data,
+          pgpKeys.ada.private,
+          pgpKeys.ada.passphrase,
+        );
+
+        // @todo Testing v4 & v5 scenarios will require a more important refactoring of the test.
+        if (test.metadataTypesSettings.default_resource_types === "v4") {
+          expect(secret1).toEqual(
+            '{"password":"Password 1","description":"Description 1","totp":{"secret_key":"THISISASECRET","period":30,"digits":6,"algorithm":"SHA1"}}',
+          );
+        } else {
+          expect(secret1).toEqual(
+            '{"object_type":"PASSBOLT_SECRET_DATA","password":"Password 1","description":"Description 1","totp":{"secret_key":"THISISASECRET","period":30,"digits":6,"algorithm":"SHA1"}}',
+          );
+        }
+
+        //Remove encrypted secrets checked previously
+        delete importedResources[0]._secrets;
+
+        const externalEntity = new ExternalResourceEntity(
+          defaultExternalResourceImportMinimalDto({
+            id: importedResources[0].id,
+            name: "Password 1",
+            resource_type_id: expectedResourceType.id,
+            folder_parent_path: "import-ref/Folder 1",
+            uris: ["https://url1.com"],
+            username: "Username 1",
+            folder_parent_path_expected: "",
+          }),
+        );
+
+        expect(importedResources[0].toDto()).toEqual(externalEntity.toDto());
+      });
+
+      it("Should throw an error if the resource type cannot be found", async () => {
+        expect.assertions(5);
+
+        jest
+          .spyOn(GetOrFindResourceTypesService.prototype, "getOrFindAll")
+          .mockImplementationOnce(() => new ResourceTypesCollection([]));
+
+        importResourceFileCSV = new ImportResourcesFileEntity(
+          defaultImportResourceFileCSVDto({
+            file: btoa(BinaryConvert.toBinary(defaultKDBXCSVData())),
+          }),
+        );
+
+        await importResourcesService.parseFile(importResourceFileCSV);
+        const result = await importResourcesService.importFile(importResourceFileCSV, passphrase);
+        const error = result.importResourcesErrors[0];
+
+        expect(importResourceFileCSV.importResources.items.length).toEqual(0);
+        expect(result.importResourcesErrors.length).toEqual(1);
+        expect(result.importResourcesWarnings.length).toEqual(0);
+        expect(error.sourceError).toBeInstanceOf(Error);
+        expect(error.sourceError.message).toEqual("No resource type associated to this row.");
+      });
+    });
+
+    describe.each([
+      {
+        scenario: RESOURCE_TYPE_V5_DEFAULT_SLUG,
+        importResourcesFile: new ImportResourcesFileEntity(defaultImportResourceFileCSVDto()),
+      },
+      {
+        scenario: RESOURCE_TYPE_V5_DEFAULT_TOTP_SLUG,
+        importResourcesFile: new ImportResourcesFileEntity(
+          defaultImportResourceFileCSVDto({
+            data: defaultKDBXCSVData,
+          }),
+        ),
+      },
+      {
+        scenario: RESOURCE_TYPE_V5_TOTP_SLUG,
+        importResourcesFile: new ImportResourcesFileEntity(
+          defaultImportResourceFileCSVDto({
+            data: KdbxCsvFileTotpData,
+          }),
+        ),
+      },
+    ])("Should encrypt the metadata", (test) => {
+      it(`Should encrypt the metadata - <${test.scenario}>`, async () => {
+        expect.assertions(10);
+        jest
+          .spyOn(GetOrFindMetadataSettingsService.prototype, "getOrFindTypesSettings")
+          .mockImplementationOnce(() => new MetadataTypesSettingsEntity(defaultMetadataTypesSettingsV50FreshDto()));
+
+        await importResourcesService.parseFile(test.importResourcesFile);
+        await importResourcesService.importFile(test.importResourcesFile, passphrase);
+
+        const createCalls = ResourceService.prototype.create.mock.calls;
+
+        expect(createCalls.length).toEqual(2);
+
+        const createdCollection = new ResourcesCollection([createCalls[0][0], createCalls[1][0]]);
+
+        expect(createdCollection.items[0].isMetadataDecrypted()).toEqual(false);
+        expect(createdCollection.items[1].isMetadataDecrypted()).toEqual(false);
+
+        const expectedCollection = new ResourcesCollection(
+          test.importResourcesFile.importResources.toResourceCollectionImportDto(),
+        );
+        await decryptMetadataService.decryptAllFromForeignModels(createdCollection, pgpKeys.ada.passphrase);
+        expect(createdCollection.items[0].isMetadataDecrypted()).toEqual(true);
+        expect(createdCollection.items[1].isMetadataDecrypted()).toEqual(true);
+        expect(createdCollection.items[0].metadataKeyType).toEqual("user_key");
+        expect(createdCollection.items[0].metadataKeyId).toBeNull();
+        expect(createdCollection.items[1].metadataKeyType).toEqual("user_key");
+        expect(createdCollection.items[1].metadataKeyId).toBeNull();
+        //Checked
+        delete createdCollection.items[0]._props.metadata_key_type;
+        delete createdCollection.items[1]._props.metadata_key_type;
+        delete createdCollection.items[0]._props.metadata_key_id;
+        delete createdCollection.items[1]._props.metadata_key_id;
+
+        expect(createdCollection).toEqual(expectedCollection);
+      });
+    });
+
+    it(`Should not encrypt the metadata - <v4>`, async () => {
+      expect.assertions(4);
+      jest
+        .spyOn(GetOrFindMetadataSettingsService.prototype, "getOrFindTypesSettings")
+        .mockImplementationOnce(() => new MetadataTypesSettingsEntity(defaultMetadataTypesSettingsV4Dto()));
+      const importResourcesFile = new ImportResourcesFileEntity(defaultImportResourceFileCSVDto());
+
+      await importResourcesService.parseFile(importResourcesFile);
+      await importResourcesService.importFile(importResourcesFile, passphrase);
+
+      const createCalls = ResourceService.prototype.create.mock.calls;
+
+      expect(createCalls.length).toEqual(2);
+
+      const createdCollection = new ResourcesCollection([createCalls[0][0], createCalls[1][0]]);
+
+      expect(createdCollection.items[0].isMetadataDecrypted()).toEqual(true);
+      expect(createdCollection.items[1].isMetadataDecrypted()).toEqual(true);
+
+      const expectedCollection = new ResourcesCollection(
+        importResourcesFile.importResources.toResourceCollectionImportDto(),
+      );
+
+      expect(createdCollection).toEqual(expectedCollection);
+    });
+
+    it("Should inform the user about the progress", async () => {
+      expect.assertions(9);
+
+      jest.spyOn(importResourcesService.progressService, "updateGoals");
+      jest.spyOn(importResourcesService.progressService, "finishStep");
+
+      await importResourcesService.parseFile(importResourceFileCSV);
+      await importResourcesService.importFile(importResourceFileCSV, passphrase);
+
+      expect(importResourcesService.progressService.updateGoals).toHaveBeenCalledTimes(1);
+      expect(importResourcesService.progressService.updateGoals).toHaveBeenCalledWith(6);
+      expect(importResourcesService.progressService.finishStep).toHaveBeenCalledTimes(6);
+      expect(importResourcesService.progressService.finishStep).toHaveBeenCalledWith("Encrypting 1/2");
+      expect(importResourcesService.progressService.finishStep).toHaveBeenCalledWith("Encrypting 2/2");
+      expect(importResourcesService.progressService.finishStep).toHaveBeenCalledWith("Encrypting 2 metadata");
+      expect(importResourcesService.progressService.finishStep).toHaveBeenCalledWith("Importing passwords 1/2");
+      expect(importResourcesService.progressService.finishStep).toHaveBeenCalledWith("Importing passwords 2/2");
+      expect(importResourcesService.progressService.finishStep).toHaveBeenCalledWith(null, true);
+    });
+
+    it("Should parse the file - <folder>", async () => {
+      expect.assertions(7);
+
+      importResourceFileCSV = new ImportResourcesFileEntity(
+        defaultImportResourceFileCSVDto({
+          options: {
+            folders: true,
+          },
+        }),
+      );
+
+      await importResourcesService.parseFile(importResourceFileCSV);
+      const result = await importResourcesService.importFile(importResourceFileCSV, passphrase);
+
+      const externalFolderEntity1 = new ExternalFolderEntity(
+        minimalExternalFolderDto({
+          id: result.importFolders.items[0].id,
+          name: "Folder",
+          folder_parent_id: result.importFolders.items[0].folderParentId,
+          folder_parent_path: "import-ref",
+        }),
+      );
+
+      const externalFolderEntity2 = new ExternalFolderEntity(
+        minimalExternalFolderDto({
+          id: result.importFolders.items[1].id,
+          name: "import-ref",
+          folder_parent_path: "",
+        }),
+      );
+
+      expect(result.importResources.items.length).toEqual(2);
+      expect(result.importResourcesErrors.length).toEqual(0);
+      expect(result.importFolders.items.length).toEqual(2);
+      expect(result.importFoldersErrors.length).toEqual(0);
+      expect(result.importResourcesWarnings.length).toEqual(0);
+      expect(result.importFolders.items[0].toDto()).toEqual(externalFolderEntity1.toDto());
+      expect(result.importFolders.items[1].toDto()).toEqual(externalFolderEntity2.toDto());
+    });
+
+    it("Should inform the user about the progress - <folder>", async () => {
+      expect.assertions(9);
+
+      jest.spyOn(importResourcesService.progressService, "updateGoals");
+
+      importResourceFileCSV = new ImportResourcesFileEntity(
+        defaultImportResourceFileCSVDto({
+          options: {
+            folders: true,
+          },
+        }),
+      );
+
+      await importResourcesService.parseFile(importResourceFileCSV);
+      await importResourcesService.importFile(importResourceFileCSV, passphrase);
+
+      expect(importResourcesService.progressService.finishStep).toHaveBeenCalledTimes(8);
+      expect(importResourcesService.progressService.finishStep).toHaveBeenCalledWith("Encrypting 1/2");
+      expect(importResourcesService.progressService.finishStep).toHaveBeenCalledWith("Encrypting 2/2");
+      expect(importResourcesService.progressService.finishStep).toHaveBeenCalledWith("Encrypting 2 metadata");
+      expect(importResourcesService.progressService.finishStep).toHaveBeenCalledWith("Importing passwords 1/2");
+      expect(importResourcesService.progressService.finishStep).toHaveBeenCalledWith("Importing passwords 2/2");
+      expect(importResourcesService.progressService.finishStep).toHaveBeenCalledWith("Importing folders 1/2");
+      expect(importResourcesService.progressService.finishStep).toHaveBeenCalledWith("Importing folders 2/2");
+      expect(importResourcesService.progressService.finishStep).toHaveBeenCalledWith(null, true);
+    });
+
+    it("Should parse the file - <tag>", async () => {
+      expect.assertions(5);
+
+      importResourceFileCSV = new ImportResourcesFileEntity(
+        defaultImportResourceFileCSVDto({
+          options: {
+            tags: true,
+          },
+        }),
+      );
+
+      await importResourcesService.parseFile(importResourceFileCSV);
+      const result = await importResourcesService.importFile(importResourceFileCSV, passphrase);
+
+      //Reference tag is never return, so we retrieve it from storage
+      const resourceCollectionStored1 = await ResourceLocalStorage.getResourceById(result.importResources.items[0].id);
+      const resourceCollectionStored2 = await ResourceLocalStorage.getResourceById(result.importResources.items[1].id);
+
+      expect(result.importResources.items.length).toEqual(2);
+      expect(result.importResourcesErrors.length).toEqual(0);
+      expect(result.importResourcesWarnings.length).toEqual(0);
+      expect(resourceCollectionStored1.tags[0].slug).toEqual("import-ref");
+      expect(resourceCollectionStored2.tags[0].slug).toEqual("import-ref");
+    });
+
+    it("Should init the error found during import without blocking import", async () => {
+      expect.assertions(9);
+
+      importResourceFileCSV = new ImportResourcesFileEntity(
+        defaultImportResourceFileCSVDto({
+          file: btoa(
+            BinaryConvert.toBinary(
+              [
+                "Title,Username,URL,Password,Notes,Group",
+                `${"a".repeat(100000)},,,test,,\n`,
+                "Password 1,Username 1,https://url1.com,Password 1,Description 1",
+              ].join("\n"),
+            ),
+          ),
+        }),
+      );
+
+      await importResourcesService.parseFile(importResourceFileCSV);
+      const result = await importResourcesService.importFile(importResourceFileCSV, passphrase);
+
+      expect(result.importResources.items.length).toEqual(1);
+      expect(result.importResourcesErrors.length).toEqual(1);
+      expect(result.importResourcesWarnings.length).toEqual(0);
+
+      const secret1 = await decryptSecret(
+        importResourceFileCSV.importResources.items[0].secrets.items[0].data,
+        pgpKeys.ada.private,
+        pgpKeys.ada.passphrase,
+      );
+      const error = importResourceFileCSV.importResourcesErrors[0];
+
+      expect(error).toBeInstanceOf(ImportError);
+      expect(error.sourceError).toBeInstanceOf(EntityValidationError);
+      expect(error.sourceError.details).toHaveProperty("name");
+      expect(secret1).toEqual('{"password":"Password 1","description":"Description 1"}');
+
+      expect(result.importResources.items[0].name).toEqual("Password 1");
+      expect(result.importResources.items[0].secretClear).toEqual("");
+    });
+
+    it("Should init the error found during import without blocking import - <folder>", async () => {
+      expect.assertions(9);
+
+      importResourceFileCSV = new ImportResourcesFileEntity(
+        defaultImportResourceFileCSVDto({
+          file: btoa(
+            BinaryConvert.toBinary(
+              [
+                "Title,Username,URL,Password,Notes,Group",
+                `Folder error,,,test,,${"a".repeat(100000)}\n`,
+                "Password 1,Username 1,https://url1.com,Password 1,Description 1",
+              ].join("\n"),
+            ),
+          ),
+          options: {
+            folders: true,
+          },
+        }),
+      );
+
+      await importResourcesService.parseFile(importResourceFileCSV);
+      const result = await importResourcesService.importFile(importResourceFileCSV, passphrase);
+
+      expect(result.importResources.items.length).toEqual(2);
+      expect(result.importResourcesErrors.length).toEqual(0);
+      expect(result.importFolders.length).toEqual(1);
+      expect(result.importFoldersErrors.length).toEqual(1);
+      expect(result.importResourcesWarnings.length).toEqual(0);
+
+      const error = importResourceFileCSV.importFoldersErrors[0];
+
+      expect(error).toBeInstanceOf(ImportError);
+      expect(error.sourceError).toBeInstanceOf(EntityValidationError);
+      expect(error.sourceError.details).toHaveProperty("name");
+      expect(result.importFolders.items[0].name).toEqual("import-ref");
+    });
+
+    describe("Password Expiry on Import", () => {
+      describe("PRO Edition", () => {
+        beforeEach(() => {
+          const collection = resourceTypesCollectionDto();
+          jest.spyOn(ResourceTypeService.prototype, "findAll").mockImplementation(() => collection);
+          jest
+            .spyOn(GetOrFindMetadataSettingsService.prototype, "getOrFindTypesSettings")
+            .mockImplementationOnce(() => new MetadataTypesSettingsEntity(defaultMetadataTypesSettingsV50FreshDto()));
+        });
+
+        it("Should set expiry date when password expiry feature is enabled with default period", async () => {
+          expect.assertions(3);
+
+          jest
+            .spyOn(GetOrFindSiteSettingsService.prototype, "getOrFind")
+            .mockImplementation(() => new SiteSettingsEntity(defaultProSiteSettings()));
+
+          jest.spyOn(PasswordExpirySettingsService.prototype, "find").mockImplementation(() =>
+            defaultPasswordExpirySettingsDtoFromApi({
+              default_expiry_period: 90,
+            }),
+          );
+
+          await importResourcesService.parseFile(importResourceFileCSV);
+          await importResourcesService.importFile(importResourceFileCSV, passphrase);
+
+          const createCalls = ResourceService.prototype.create.mock.calls;
+
+          expect(createCalls.length).toEqual(2);
+
+          const createdCollection = new ResourcesCollection([createCalls[0][0], createCalls[1][0]]);
+
+          expect(createdCollection.items[0]._props.expired).not.toBeNull();
+          expect(createdCollection.items[1]._props.expired).not.toBeNull();
+        });
+
+        describe("Should not set expiry date when", () => {
+          it("password expiry plugin is disabled", async () => {
+            expect.assertions(3);
+
+            const organizationSettings = defaultProSiteSettings();
+            organizationSettings.passbolt.plugins.passwordExpiry.enabled = false;
+
+            jest
+              .spyOn(GetOrFindSiteSettingsService.prototype, "getOrFind")
+              .mockImplementation(() => new SiteSettingsEntity(organizationSettings));
+
+            jest.spyOn(PasswordExpirySettingsService.prototype, "find").mockImplementation(() =>
+              defaultPasswordExpirySettingsDtoFromApi({
+                default_expiry_period: 90,
+              }),
+            );
+
+            await importResourcesService.parseFile(importResourceFileCSV);
+            await importResourcesService.importFile(importResourceFileCSV, passphrase);
+
+            const createCalls = ResourceService.prototype.create.mock.calls;
+
+            expect(createCalls.length).toEqual(2);
+
+            const createdCollection = new ResourcesCollection([createCalls[0][0], createCalls[1][0]]);
+
+            expect(createdCollection.items[0]._props.expired).toBeNull();
+            expect(createdCollection.items[1]._props.expired).toBeNull();
+          });
+
+          it("password expiry policies feature is disabled", async () => {
+            expect.assertions(3);
+
+            const organizationSettings = defaultProSiteSettings();
+            organizationSettings.passbolt.plugins.passwordExpiryPolicies.enabled = false;
+
+            jest
+              .spyOn(GetOrFindSiteSettingsService.prototype, "getOrFind")
+              .mockImplementation(() => new SiteSettingsEntity(organizationSettings));
+
+            jest.spyOn(PasswordExpirySettingsService.prototype, "find").mockImplementation(() =>
+              defaultPasswordExpirySettingsDtoFromApi({
+                default_expiry_period: 90,
+              }),
+            );
+
+            await importResourcesService.parseFile(importResourceFileCSV);
+            await importResourcesService.importFile(importResourceFileCSV, passphrase);
+
+            const createCalls = ResourceService.prototype.create.mock.calls;
+
+            expect(createCalls.length).toEqual(2);
+
+            const createdCollection = new ResourcesCollection([createCalls[0][0], createCalls[1][0]]);
+
+            expect(createdCollection.items[0]._props.expired).toBeNull();
+            expect(createdCollection.items[1]._props.expired).toBeNull();
+          });
+
+          it("default expiry period is not set", async () => {
+            expect.assertions(3);
+
+            jest
+              .spyOn(GetOrFindSiteSettingsService.prototype, "getOrFind")
+              .mockImplementation(() => new SiteSettingsEntity(defaultProSiteSettings()));
+
+            jest
+              .spyOn(PasswordExpirySettingsService.prototype, "find")
+              .mockImplementation(() => defaultPasswordExpirySettingsDtoFromApi());
+
+            await importResourcesService.parseFile(importResourceFileCSV);
+            await importResourcesService.importFile(importResourceFileCSV, passphrase);
+
+            const createCalls = ResourceService.prototype.create.mock.calls;
+
+            expect(createCalls.length).toEqual(2);
+
+            const createdCollection = new ResourcesCollection([createCalls[0][0], createCalls[1][0]]);
+
+            expect(createdCollection.items[0]._props.expired).toBeNull();
+            expect(createdCollection.items[1]._props.expired).toBeNull();
+          });
+        });
+      });
+
+      describe("CE Edition", () => {
+        beforeEach(() => {
+          jest
+            .spyOn(GetOrFindMetadataSettingsService.prototype, "getOrFindTypesSettings")
+            .mockImplementationOnce(() => new MetadataTypesSettingsEntity(defaultMetadataTypesSettingsV50FreshDto()));
+        });
+
+        it("Should not set expiry date even when password expiry plugin is enabled", async () => {
+          expect.assertions(3);
+
+          const organizationSettings = defaultCeSiteSettings();
+          organizationSettings.passbolt.plugins.passwordExpiry = {
+            version: "1.0.0",
+            enabled: true,
+          };
+
+          jest
+            .spyOn(GetOrFindSiteSettingsService.prototype, "getOrFind")
+            .mockImplementation(() => new SiteSettingsEntity(organizationSettings));
+
+          jest
+            .spyOn(PasswordExpirySettingsService.prototype, "find")
+            .mockImplementation(() => defaultPasswordExpirySettingsDtoFromApi());
+
+          await importResourcesService.parseFile(importResourceFileCSV);
+          await importResourcesService.importFile(importResourceFileCSV, passphrase);
+
+          const createCalls = ResourceService.prototype.create.mock.calls;
+
+          expect(createCalls.length).toEqual(2);
+
+          const createdCollection = new ResourcesCollection([createCalls[0][0], createCalls[1][0]]);
+
+          expect(createdCollection.items[0]._props.expired).toBeNull();
+          expect(createdCollection.items[1]._props.expired).toBeNull();
+        });
+      });
+    });
+  });
+});

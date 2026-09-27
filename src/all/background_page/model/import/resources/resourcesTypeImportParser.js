@@ -1,0 +1,204 @@
+/**
+ * Passbolt ~ Open source password manager for teams
+ * Copyright (c) Passbolt SA (https://www.passbolt.com)
+ *
+ * Licensed under GNU Affero General Public License version 3 of the or any later version.
+ * For full copyright and license information, please see the LICENSE.txt
+ * Redistributions of files must retain the above copyright notice.
+ *
+ * @copyright     Copyright (c) Passbolt SA (https://www.passbolt.com)
+ * @license       https://opensource.org/licenses/AGPL-3.0 AGPL License
+ * @link          https://www.passbolt.com Passbolt(tm)
+ * @since         4.10.0
+ */
+
+import {
+  RESOURCE_TYPE_PASSWORD_AND_DESCRIPTION_SLUG,
+  RESOURCE_TYPE_PASSWORD_DESCRIPTION_TOTP_SLUG,
+  RESOURCE_TYPE_PASSWORD_STRING_SLUG,
+  RESOURCE_TYPE_V5_DEFAULT_SLUG,
+  RESOURCE_TYPE_V5_DEFAULT_TOTP_SLUG,
+  RESOURCE_TYPE_V5_PASSWORD_STRING_SLUG,
+  RESOURCE_TYPE_V5_STANDALONE_PIN_CODE_SLUG,
+} from "passbolt-styleguide/src/shared/models/entity/resourceType/resourceTypeSchemasDefinition";
+
+class ResourcesTypeImportParser {
+  /**
+   * Based on the score, we find the perfect resource type matching with import
+   * @param {ResourceTypesCollection} resourceTypesCollection The available resource types
+   * @param {object} scores the scores calculated for each resourceType
+   * @returns {ResourceTypeEntity}
+   */
+  static findMatchingResourceType(resourceTypesCollection, scores) {
+    //Get highest
+    const matchedResourceType = scores
+      .filter((score) => score.value > 0) // Supports at least one parsed property
+      .filter((score) => score.missingRequiredFields === 0) // Meets all required properties
+      .sort((a, b) => b.value - a.value)[0]; // Supports the highest number of properties
+
+    if (!matchedResourceType) {
+      return;
+    }
+    return resourceTypesCollection.getFirst("slug", matchedResourceType.slug);
+  }
+
+  /**
+   * Based on the score, we find the resource type which partially work based on the score
+   * @param {ResourceTypesCollection} resourceTypesCollection The available resource types
+   * @param {object} scores the scores calculated for each resourceType
+   * @returns {ResourceTypeEntity}
+   */
+  static findPartialResourceType(resourceTypesCollection, scores) {
+    //Get highest partial match which has at least score to 1
+    const matchedResourceType = scores
+      .filter((score) => score.value > 0) // Supports at least one parsed property
+      .sort((a, b) => a.missingRequiredFields - b.missingRequiredFields)[0]; // Supports with the lowest required missing field
+
+    if (!matchedResourceType) {
+      return;
+    }
+
+    return resourceTypesCollection.getFirst("slug", matchedResourceType.slug);
+  }
+
+  /**
+   * Fallback to default resource type if import does not match with any supported resource type
+   * @param {ResourceTypesCollection} resourceTypesCollection The available resource types
+   * @param {MetadataTypesSettingsEntity} metadataTypesSettings The metadata types from the organization
+   * @returns
+   */
+  static fallbackDefaulResourceType(resourceTypesCollection, metadataTypesSettings) {
+    let resourceType;
+
+    if (metadataTypesSettings.isDefaultResourceTypeV5) {
+      resourceType = resourceTypesCollection.getFirst("slug", RESOURCE_TYPE_V5_DEFAULT_SLUG);
+    } else {
+      resourceType = resourceTypesCollection.getFirst("slug", RESOURCE_TYPE_PASSWORD_AND_DESCRIPTION_SLUG);
+    }
+
+    if (!resourceType) {
+      throw new Error("No resource type associated to this row.");
+    }
+
+    return resourceType;
+  }
+
+  /**
+   * Get scores for each resources based on the resourceTypes
+   * @param {object} externalResourceDto the csv row data
+   * @param {ResourceTypesCollection} resourceTypesCollection The available resource types
+   * @returns {Object}
+   */
+  static getScores(externalResourceDto, resourceTypesCollection) {
+    const scores = [];
+
+    for (let i = 0; i < resourceTypesCollection.length; i++) {
+      const resourceType = resourceTypesCollection.items[i];
+
+      //Skip legacy resourceType if it exists
+      if (
+        resourceType.slug === RESOURCE_TYPE_PASSWORD_STRING_SLUG ||
+        resourceType.slug === RESOURCE_TYPE_V5_PASSWORD_STRING_SLUG
+      ) {
+        continue;
+      }
+
+      const resourceProperties = Object.entries(externalResourceDto)
+        .filter(([, value]) => {
+          if (typeof value === "string") {
+            return value.length > 0; // Exclude empty strings
+          }
+          return true;
+        })
+        .map(([key]) => (key === "secret_clear" ? "password" : key));
+
+      // Exception to be removed with v5: we need to include password in the resource
+      if (
+        (resourceType.slug === RESOURCE_TYPE_PASSWORD_DESCRIPTION_TOTP_SLUG ||
+          resourceType.slug === RESOURCE_TYPE_V5_DEFAULT_TOTP_SLUG) &&
+        resourceProperties.includes("totp") &&
+        resourceProperties.includes("description")
+      ) {
+        resourceProperties.push("password");
+      }
+
+      const secretsFields = Object.keys(resourceType.definition.secret.properties).filter(
+        (prop) => prop !== "object_type",
+      );
+      const secretsRequiredFields = resourceType.definition.secret.required.filter((prop) => prop !== "object_type");
+      const score = resourceProperties.filter((value) => secretsFields.includes(value));
+      const missingRequiredFields = secretsRequiredFields.filter(
+        (secretsField) => !score.includes(secretsField),
+      ).length;
+
+      scores.push({
+        slug: resourceType.slug,
+        value: score.length,
+        missingRequiredFields: missingRequiredFields,
+      });
+    }
+
+    return scores;
+  }
+
+  /**
+   * Properties allowed to have non-empty values for a standalone PIN code resource.
+   * Any other property with a non-empty value disqualifies the entry.
+   * @type {Set<string>}
+   */
+  static get PIN_CODE_ALLOWED_PROPERTIES() {
+    return new Set([
+      "name",
+      "secret_clear",
+      "description",
+      "folder_parent_path",
+      "id",
+      "resource_type_id",
+      "expired",
+      "icon",
+    ]);
+  }
+
+  /**
+   * Detect if the imported resource is a standalone PIN code and reclassify the DTO accordingly.
+   * A PIN code is detected when the secret_clear is a 4-12 digit string and the entry has no additional
+   * data beyond an optional description.
+   * @param {object} externalResourceDto The external resource DTO to evaluate and potentially mutate
+   * @param {ResourceTypesCollection} resourceTypesCollection The available resource types
+   */
+  static parsePinCode(externalResourceDto, resourceTypesCollection) {
+    const hasPinCodeType = resourceTypesCollection.items.some(
+      (resourceType) => resourceType.slug === RESOURCE_TYPE_V5_STANDALONE_PIN_CODE_SLUG,
+    );
+    if (!hasPinCodeType) {
+      return;
+    }
+
+    const secretClear = externalResourceDto.secret_clear;
+    if (!secretClear || !/^\d{4,12}$/.test(secretClear)) {
+      return;
+    }
+
+    const hasExtraContent = Object.entries(externalResourceDto).some(([key, value]) => {
+      if (this.PIN_CODE_ALLOWED_PROPERTIES.has(key)) {
+        return false;
+      }
+      if (Array.isArray(value)) {
+        return value.some(Boolean);
+      }
+      if (typeof value === "string") {
+        return value.length > 0;
+      }
+      return Boolean(value);
+    });
+
+    if (hasExtraContent) {
+      return;
+    }
+
+    externalResourceDto.pin_code = secretClear;
+    externalResourceDto.secret_clear = "";
+  }
+}
+
+export default ResourcesTypeImportParser;

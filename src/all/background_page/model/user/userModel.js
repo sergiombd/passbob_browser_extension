@@ -1,0 +1,211 @@
+/**
+ * Passbolt ~ Open source password manager for teams
+ * Copyright (c) Passbolt SA (https://www.passbolt.com)
+ *
+ * Licensed under GNU Affero General Public License version 3 of the or any later version.
+ * For full copyright and license information, please see the LICENSE.txt
+ * Redistributions of files must retain the above copyright notice.
+ *
+ * @copyright     Copyright (c) Passbolt SA (https://www.passbolt.com)
+ * @license       https://opensource.org/licenses/AGPL-3.0 AGPL License
+ * @link          https://www.passbolt.com Passbolt(tm)
+ * @since         3.0.0
+ */
+import UserLocalStorage from "../../service/local_storage/userLocalStorage";
+import UserApiService from "passbolt-styleguide/src/shared/services/api/user/userApiService";
+import UserEntity from "../entity/user/userEntity";
+import UsersCollection from "passbolt-styleguide/src/shared/models/entity/user/usersCollection";
+import Validator from "validator";
+import RoleEntity from "passbolt-styleguide/src/shared/models/entity/role/roleEntity";
+import GetOrFindSiteSettingsService from "../../service/siteSettings/getOrFindSiteSettingsService";
+
+/**
+ * @deprecated
+ */
+class UserModel {
+  /**
+   * Constructor
+   *
+   * @param {ApiClientOptions} apiClientOptions
+   * @param {AccountEntity} account the account associated to the worker
+   * @public
+   */
+  constructor(apiClientOptions, account = null) {
+    this.userApiService = new UserApiService(apiClientOptions);
+    this.apiClientOptions = apiClientOptions;
+    this.account = account;
+  }
+
+  /**
+   * Update the users local storage with the latest API
+   *
+   * @return {UsersCollection}
+   * @public
+   */
+  async updateLocalStorage() {
+    // contain pending_account_recovery_request is only available for admin or recovery contact role
+    const contains = {
+      profile: true,
+      gpgkey: false,
+      groups_users: false,
+      pending_account_recovery_request: true,
+      account_recovery_user_setting: true,
+    };
+    // last_logged_in and is_mfa_enabled contains are only available for admin.
+
+    if (this.account && this.account.roleName === RoleEntity.ROLE_ADMIN) {
+      contains.last_logged_in = true;
+      contains.is_mfa_enabled = true;
+      const getOrFindSiteSettingsService = new GetOrFindSiteSettingsService(this.account, this.apiClientOptions);
+      const siteSettings = await getOrFindSiteSettingsService.getOrFind();
+      if (siteSettings.isPluginEnabled("metadata")) {
+        contains.missing_metadata_key_ids = true;
+      }
+    }
+    const usersCollection = await this.findAll(contains, null, true);
+    await UserLocalStorage.set(usersCollection);
+    return usersCollection;
+  }
+
+  /**
+   * Resend an invite to a user
+   *
+   * @param {string} username The user username
+   * @return {Promise<*>}
+   * @public
+   */
+  async resendInvite(username) {
+    return this.userApiService.resendInvite(username);
+  }
+
+  /**
+   * Get a collection of all users from the local storage.
+   * If the local storage is unset, initialize it.
+   *
+   * @return {UsersCollection}
+   */
+  async getOrFindAll() {
+    const usersDto = await UserLocalStorage.get();
+    if (typeof usersDto !== "undefined") {
+      return new UsersCollection(usersDto);
+    }
+    return this.updateLocalStorage();
+  }
+
+  /*
+   * ==============================================================
+   *  Finders / remote calls
+   * ==============================================================
+   */
+
+  /**
+   * Find one
+   *
+   * @param {string} userId The user id to find
+   * @param {Object?} contains (optional) example: {permissions: true}
+   * @param {boolean?} [ignoreInvalidEntity] Should invalid entities be ignored.
+   * @returns {Promise<UserEntity>}
+   */
+  async findOne(userId, contains, ignoreInvalidEntity) {
+    const userDto = await this.userApiService.get(userId, contains);
+    return new UserEntity(userDto, { ignoreInvalidEntity: ignoreInvalidEntity });
+  }
+
+  /**
+   * Find all
+   *
+   * @param {Object} [contains] optional example: {groups_users: true}
+   * @param {Object} [filters] optional
+   * @param {boolean?} [ignoreInvalidEntity] Should invalid entities be ignored.
+   * @returns {Promise<UsersCollection>}
+   */
+  async findAll(contains, filters, ignoreInvalidEntity) {
+    const usersDto = (await this.userApiService.findAll(contains, filters)).body ?? [];
+    return new UsersCollection(usersDto, { clone: false, ignoreInvalidEntity: ignoreInvalidEntity });
+  }
+
+  /**
+   * Find all user ids who have access to a user
+   *
+   * @param {string} userId uuid
+   * @returns {Promise<Array<string>>} Array of user uuids
+   * @public
+   */
+  async findAllIdsForResourceUpdate(userId) {
+    if (!Validator.isUUID(userId)) {
+      throw new TypeError("Error in find all users for users updates. The user id is not a valid uuid.");
+    }
+    const usersDto = (await this.userApiService.findAll(null, { "has-access": userId })).body ?? [];
+    const usersCollection = new UsersCollection(usersDto);
+    return usersCollection.extract("id");
+  }
+
+  /*
+   * ==============================================================
+   *  CRUD
+   * ==============================================================
+   */
+  /**
+   * Create a user using Passbolt API and add result to local storage
+   *
+   * @param {UserEntity} userEntity
+   * @returns {Promise<UserEntity>}
+   * @public
+   */
+  async create(userEntity) {
+    const data = userEntity.toDto({ profile: { avatar: false } });
+    const userDto = await this.userApiService.create(data);
+    const newUserEntity = new UserEntity(userDto);
+    await UserLocalStorage.addUser(newUserEntity);
+    return newUserEntity;
+  }
+
+  /**
+   * Update a user using Passbolt API and add result to local storage
+   *
+   * @param {UserEntity} userEntity
+   * @param {boolean?} [ignoreInvalidEntity] Should invalid entities be ignored.
+   * @returns {Promise<UserEntity>}
+   * @public
+   */
+  async update(userEntity, ignoreInvalidEntity) {
+    const data = userEntity.toDto({ profile: { avatar: false } });
+    const userDto = await this.userApiService.update(userEntity.id, data);
+    const updatedUserEntity = new UserEntity(userDto, { ignoreInvalidEntity });
+    await UserLocalStorage.updateUser(updatedUserEntity);
+    return updatedUserEntity;
+  }
+
+  /**
+   * Update a user using Passbolt API and add result to local storage
+   *
+   * @param {string} userId The user id to update the avatar for
+   * @param {AvatarUpdateEntity} avatarUpdateEntity The avatar update entity
+   * @param {boolean?} [ignoreInvalidEntity] Should invalid entities be ignored.
+   * @returns {Promise<UserEntity>}
+   * @public
+   */
+  async updateAvatar(userId, avatarUpdateEntity, ignoreInvalidEntity) {
+    const userDto = await this.userApiService.updateAvatar(
+      userId,
+      avatarUpdateEntity.file,
+      avatarUpdateEntity.filename,
+    );
+    return new UserEntity(userDto, { ignoreInvalidEntity });
+  }
+
+  /**
+   * Request help when a user lost its credentials.
+   * @param {AbstractAccountEntity} account The account the credentials have been lost for.
+   * @returns {Promise<void>}
+   */
+  async requestHelpCredentialsLost(account) {
+    const requestHelpDto = {
+      username: account.username,
+      case: "lost-passphrase",
+    };
+    await this.userApiService.requestHelpCredentialsLost(requestHelpDto);
+  }
+}
+
+export default UserModel;

@@ -1,0 +1,101 @@
+/**
+ * Passbolt ~ Open source password manager for teams
+ * Copyright (c) 2022 Passbolt SA (https://www.passbolt.com)
+ *
+ * Licensed under GNU Affero General Public License version 3 of the or any later version.
+ * For full copyright and license information, please see the LICENSE.txt
+ * Redistributions of files must retain the above copyright notice.
+ *
+ * @copyright     Copyright (c) 2022 Passbolt SA (https://www.passbolt.com)
+ * @license       https://opensource.org/licenses/AGPL-3.0 AGPL License
+ * @link          https://www.passbolt.com Passbolt(tm)
+ * @since         3.6.0
+ */
+import DownloadRecoveryKitController from "../controller/setup/downloadRecoverKitController";
+import ContinueAccountRecoveryController from "../controller/accountRecovery/continueAccountRecoveryController";
+import RecoverAccountController from "../controller/accountRecovery/recoverAccountController";
+import VerifyAccountPassphraseController from "../controller/account/verifyAccountPassphraseController";
+import AbortAndInitiateNewAccountRecoveryController from "../controller/accountRecovery/abortAndInitiateNewAccountRecoveryController";
+import SetSetupLocaleController from "../controller/setup/setSetupLocaleController";
+import FindAndUpdateSiteSettingsLocalStorageController from "../controller/siteSettings/findAndUpdateSiteSettingsLocalStorageController";
+import GetAndInitializeAccountLocaleController from "../controller/account/getAndInitializeAccountLocaleController";
+import GetExtensionVersionController from "../controller/extension/getExtensionVersionController";
+import GetAccountController from "../controller/account/getAccountController";
+import AccountRecoveryLoginController from "../controller/accountRecovery/accountRecoveryLoginController";
+import ReloadTabController from "../controller/tab/reloadTabController";
+
+/**
+ * Listens to the account recovery continue application events
+ * @param {Worker} worker The worker
+ * @param {ApiClientOptions} apiClientOptions The api client options
+ * @param {AccountAccountRecoveryEntity} account The account completing the account recovery
+ */
+const listen = function (worker, apiClientOptions, account) {
+  // The authentication screens bootstrap against a reachable server and need current settings.
+  worker.port.on("passbolt.site-settings.find-and-update", async (requestId) => {
+    const controller = new FindAndUpdateSiteSettingsLocalStorageController(
+      worker,
+      requestId,
+      apiClientOptions,
+      account,
+    );
+    await controller._exec();
+  });
+
+  worker.port.on("passbolt.locale.get", async (requestId) => {
+    const controller = new GetAndInitializeAccountLocaleController(worker, requestId, apiClientOptions, account);
+    await controller._exec();
+  });
+
+  worker.port.on("passbolt.addon.get-version", async (requestId) => {
+    const controller = new GetExtensionVersionController(worker, requestId);
+    await controller._exec();
+  });
+
+  worker.port.on("passbolt.account-recovery.continue", async (requestId) => {
+    const controller = new ContinueAccountRecoveryController(worker, requestId, apiClientOptions, account);
+    await controller._exec();
+  });
+
+  worker.port.on("passbolt.account-recovery.get-account", async (requestId) => {
+    const controller = new GetAccountController(worker, requestId, account);
+    await controller._exec();
+  });
+
+  worker.port.on("passbolt.account-recovery.verify-passphrase", async (requestId, passphrase) => {
+    const controller = new VerifyAccountPassphraseController(worker, requestId, account);
+    await controller._exec(passphrase);
+  });
+
+  worker.port.on("passbolt.account-recovery.recover-account", async (requestId, passphrase) => {
+    const controller = new RecoverAccountController(worker, requestId, apiClientOptions);
+    await controller._exec(passphrase);
+  });
+
+  worker.port.on("passbolt.account-recovery.sign-in", async (requestId, passphrase, rememberMe) => {
+    const controller = new AccountRecoveryLoginController(worker, requestId, apiClientOptions, account);
+    await controller._exec(passphrase, rememberMe);
+  });
+
+  worker.port.on("passbolt.account-recovery.request-help-credentials-lost", async (requestId) => {
+    const controller = new AbortAndInitiateNewAccountRecoveryController(worker, requestId, apiClientOptions, account);
+    await controller._exec();
+  });
+
+  worker.port.on("passbolt.account-recovery.download-recovery-kit", async (requestId) => {
+    const controller = new DownloadRecoveryKitController(worker, requestId);
+    await controller._exec();
+  });
+
+  worker.port.on("passbolt.locale.update-user-locale", async (requestId, localeDto) => {
+    const controller = new SetSetupLocaleController(worker, requestId, apiClientOptions, account);
+    await controller._exec(localeDto);
+  });
+
+  worker.port.on("passbolt.tab.reload", async (requestId) => {
+    const controller = new ReloadTabController(worker, requestId);
+    await controller._exec();
+  });
+};
+
+export const AccountRecoveryEvents = { listen };
