@@ -1,0 +1,33 @@
+{
+  "testEnvironment": "node",
+  "setupFiles": [
+    "<rootDir>/test/jest.env-setup.js",
+    "jest-webextension-mock",
+    "<rootDir>/test/jest-webextension-force-runtime-id-setup-files.js"
+  ],
+  "setupFilesAfterEnv": ["<rootDir>/test/jest.setup.js"],
+  "transform": {
+    "^.+\\.js$": ["babel-jest", {
+      "presets": ["@babel/env", "@babel/react"],
+      "plugins": ["@babel/plugin-transform-runtime"]
+    }]
+  },
+  "transformIgnorePatterns": ["/node_modules/(.!passbolt-styleguide)"],
+  "reporters": [
+    "default",
+    "jest-junit"
+  ],
+  "coverageReporters": [
+    "cobertura",
+    "html",
+    "text-summary"
+  ],
+  "collectCoverageFrom": [
+    "src/**/*.{js,jsx}",
+    "!src/**/*.test.js",
+    "!src/**/*.test.data.js"
+  ],
+  "moduleNameMapper": {
+    "\\.svg$": "<rootDir>/test/mocks/svg.js"
+  }
+}

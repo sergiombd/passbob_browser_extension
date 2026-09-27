@@ -1,0 +1,67 @@
+/**
+ * Passbolt ~ Open source password manager for teams
+ * Copyright (c) 2022 Passbolt SA (https://www.passbolt.com)
+ *
+ * Licensed under GNU Affero General Public License version 3 of the or any later version.
+ * For full copyright and license information, please see the LICENSE.txt
+ * Redistributions of files must retain the above copyright notice.
+ *
+ * @copyright     Copyright (c) 2022 Passbolt SA (https://www.passbolt.com)
+ * @license       https://opensource.org/licenses/AGPL-3.0 AGPL License
+ * @link          https://www.passbolt.com Passbolt(tm)
+ * @since         3.6.0
+ */
+
+import { enableFetchMocks } from "jest-fetch-mock";
+import { defaultApiClientOptions } from "passbolt-styleguide/src/shared/lib/apiClient/apiClientOptions.test.data";
+import { anonymousSiteSettings } from "passbolt-styleguide/src/shared/models/entity/siteSettings/siteSettingsEntity.test.data";
+import SiteSettingsEntity from "passbolt-styleguide/src/shared/models/entity/siteSettings/siteSettingsEntity";
+import GetOrFindSiteSettingsService from "../../service/siteSettings/getOrFindSiteSettingsService";
+import SetSetupLocaleController from "./setSetupLocaleController";
+import AccountSetupEntity from "../../model/entity/account/accountSetupEntity";
+import { initialAccountSetupDto } from "../../model/entity/account/accountSetupEntity.test.data";
+import AccountTemporarySessionStorageService from "../../service/sessionStorage/accountTemporarySessionStorageService";
+
+beforeEach(() => {
+  enableFetchMocks();
+  jest
+    .spyOn(GetOrFindSiteSettingsService.prototype, "getOrFind")
+    .mockImplementation(() => new SiteSettingsEntity(anonymousSiteSettings()));
+});
+
+describe("SetAccountLocaleController", () => {
+  describe("SetAccountLocaleController::exec", () => {
+    it("Should set the account locale and initialize i18next with it.", async () => {
+      const account = new AccountSetupEntity(initialAccountSetupDto());
+      jest.spyOn(AccountTemporarySessionStorageService, "get").mockImplementationOnce(() => ({ account: account }));
+      jest.spyOn(AccountTemporarySessionStorageService, "set").mockImplementationOnce(() => jest.fn());
+      const controller = new SetSetupLocaleController(
+        { port: { _port: { name: "test" } } },
+        null,
+        defaultApiClientOptions(),
+        account,
+      );
+
+      expect.assertions(1);
+      const localeDto = { locale: "fr-FR" };
+      await controller.exec(localeDto);
+      expect(account.locale).toEqual(localeDto.locale);
+    });
+
+    it("Should not accept unsupported locale.", async () => {
+      const account = new AccountSetupEntity(initialAccountSetupDto());
+      jest.spyOn(AccountTemporarySessionStorageService, "get").mockImplementationOnce(() => ({ account: account }));
+      const controller = new SetSetupLocaleController(
+        { port: { _port: { name: "test" } } },
+        null,
+        defaultApiClientOptions(),
+        account,
+      );
+
+      expect.assertions(1);
+      const localeDto = { locale: "ma-MA" };
+      const promise = controller.exec(localeDto);
+      await expect(promise).rejects.toThrow("Unsupported locale.");
+    });
+  });
+});

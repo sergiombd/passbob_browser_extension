@@ -1,0 +1,57 @@
+/**
+ * Passbolt ~ Open source password manager for teams
+ * Copyright (c) 2020 Passbolt SA (https://www.passbolt.com)
+ *
+ * Licensed under GNU Affero General Public License version 3 of the or any later version.
+ * For full copyright and license information, please see the LICENSE.txt
+ * Redistributions of files must retain the above copyright notice.
+ *
+ * @copyright     Copyright (c) 2020 Passbolt SA (https://www.passbolt.com)
+ * @license       https://opensource.org/licenses/AGPL-3.0 AGPL License
+ * @link          https://www.passbolt.com Passbolt(tm)
+ * @since         3.2.0
+ */
+import React from "react";
+import { createRoot } from "react-dom/client";
+import ExtQuickAccess from "passbolt-styleguide/src/react-quickaccess/ExtQuickAccess";
+import Port from "../lib/port";
+
+async function main() {
+  // The QuickAccess is only ever rendered as a top-level extension surface (toolbar popup or detached window).
+  // If it is running inside a frame, a remote page has embedded it; refuse to initialise to prevent
+  // clickjacking / UI redress of the QuickAccess UI.
+  if (window.top !== window.self) {
+    return;
+  }
+
+  const query = new URLSearchParams(window.location.search);
+  const portname = query.get("passbolt");
+  const port = new Port(portname);
+  await port.connect();
+
+  // Emit a success if the port is still connected
+  port.on("passbolt.port.check", (requestId) => port.emit(requestId, "SUCCESS"));
+
+  const storage = browser.storage;
+  const domContainer = document.querySelector("#quickaccess-container");
+  // Extract parameters from the url.
+  const urlSearchParams = new URLSearchParams(window.location.search);
+  const bootstrapFeature = urlSearchParams.get("feature");
+  const bootstrapRequestId = urlSearchParams.get("requestId");
+  const openerTabId = urlSearchParams.get("tabId");
+  const detached = urlSearchParams.get("uiMode") === "detached";
+
+  const root = createRoot(domContainer);
+  root.render(
+    <ExtQuickAccess
+      port={port}
+      storage={storage}
+      bootstrapFeature={bootstrapFeature}
+      bootstrapRequestId={bootstrapRequestId}
+      openerTabId={openerTabId}
+      detached={detached}
+    />,
+  );
+}
+
+main();

@@ -1,0 +1,225 @@
+/**
+ * Passbolt ~ Open source password manager for teams
+ * Copyright (c) Passbolt SA (https://www.passbolt.com)
+ *
+ * Licensed under GNU Affero General Public License version 3 of the or any later version.
+ * For full copyright and license information, please see the LICENSE.txt
+ * Redistributions of files must retain the above copyright notice.
+ *
+ * @copyright     Copyright (c) Passbolt SA (https://www.passbolt.com)
+ * @license       https://opensource.org/licenses/AGPL-3.0 AGPL License
+ * @link          https://www.passbolt.com Passbolt(tm)
+ * @since         4.10.1
+ */
+import Keyring from "../../model/keyring";
+import GroupModel from "../../model/group/groupModel";
+import GroupEntity from "passbolt-styleguide/src/shared/models/entity/group/groupEntity";
+import GroupUpdateEntity from "../../model/entity/group/update/groupUpdateEntity";
+import i18n from "../../sdk/i18n";
+import GroupUpdateSecretsCollection from "../../model/entity/secret/groupUpdate/groupUpdateSecretsCollection";
+import DecryptPrivateKeyService from "../crypto/decryptPrivateKeyService";
+import { assertString, assertType } from "../../utils/assertions";
+import GroupUpdatesCollection from "../../model/entity/group/update/groupUpdatesCollection";
+import GroupLocalStorage from "../local_storage/groupLocalStorage";
+import GroupApiService from "../api/group/groupApiService";
+import GroupUpdateSecretsCryptoService from "./groupUpdateSecretsCryptoService";
+import { RequestAddUsersToGroupOffscreenService } from "../../../../chrome-mv3/serviceWorker/service/addUsersToGroup/requestAddUsersToGroupOffscreenService";
+
+/**
+ * Progress goals are:
+ * - Initialize
+ * - Group update feasibility check (dry-run)
+ * - Encrypt required secrets for new users
+ * - Synchronizing keyring
+ * - Updating group
+ * - Done
+ */
+const PROGRESS_GOAL = 6;
+
+class GroupUpdateService {
+  /**
+   * @constructor
+   * @param {ApiClientOptions} apiClientOptions
+   * @param {AccountEntity} account
+   * @param {ProgressService} progressService
+   */
+  constructor(apiClientOptions, account, progressService) {
+    this.apiClientOptions = apiClientOptions;
+    this.account = account;
+    this.progressService = progressService;
+    this.groupModel = new GroupModel(apiClientOptions, account);
+    this.groupLocalStorage = new GroupLocalStorage(account);
+    this.groupApiService = new GroupApiService(apiClientOptions);
+    this.decryptPrivateKeyService = new DecryptPrivateKeyService();
+  }
+
+  /**
+   * Orchestrate dialogs during the share operation
+   *
+   * @param {GroupEntity} updatedGroupEntity
+   */
+  async exec(updatedGroupEntity, passphrase) {
+    assertType(updatedGroupEntity, GroupEntity);
+    assertString(passphrase);
+
+    const originalGroupEntity = await this.groupModel.getById(updatedGroupEntity.id);
+    const groupUpdateEntity = GroupUpdateEntity.createFromGroupsDiff(originalGroupEntity, updatedGroupEntity);
+
+    this.progressService.start(PROGRESS_GOAL, i18n.t("Initialize"));
+
+    const groupUpdateDryRunResultEntity = await this.simulateUpdateGroup(groupUpdateEntity);
+    const shouldEncryptSecrets = groupUpdateDryRunResultEntity.neededSecrets.length > 0;
+    if (shouldEncryptSecrets) {
+      groupUpdateEntity.secrets = await this.encryptNeededSecrets(passphrase, groupUpdateDryRunResultEntity);
+    } else {
+      // skipped steps are: "Encrypt required secrets for new users", "Synchronizing keyring"
+      this.progressService.finishSteps(2);
+    }
+
+    await this.updateGroup(groupUpdateEntity);
+    this.progressService.finishStep(i18n.t("Done"), true);
+  }
+
+  /**
+   * Simulate group update operation
+   * @param {GroupUpdateEntity} groupUpdateEntity The group update entity
+   * @returns {Promise<GroupUpdateDryRunResult>}
+   * @private
+   */
+  async simulateUpdateGroup(groupUpdateEntity) {
+    this.progressService.finishStep(i18n.t("Group update feasibility check"), true);
+    return await this.groupModel.updateDryRun(groupUpdateEntity);
+  }
+
+  /**
+   * Encrypt the needed secrets to complete the group update operation if necessary.
+   * @param {string} passphrase the current user's private key passphrase
+   * @param {GroupUpdateEntity} groupUpdateDryRunResultEntity The result of the group update simulation
+   * @returns {Promise<GroupUpdateSecretsCollection | null>}
+   * @private
+   */
+  async encryptNeededSecrets(passphrase, groupUpdateDryRunResultEntity) {
+    this.progressService.finishStep(i18n.t("Encrypt required secrets for new users"), true);
+
+    const isMV3 = chrome.runtime.getManifest().manifest_version === 3;
+    if (isMV3) {
+      return await this.decryptAndEncryptSecretsFromOffscreen(passphrase, groupUpdateDryRunResultEntity);
+    } else {
+      const privateKey = await DecryptPrivateKeyService.decryptArmoredKey(
+        this.account.userPrivateArmoredKey,
+        passphrase,
+      );
+      const decryptedSecrets = await this.decryptSecrets(privateKey, groupUpdateDryRunResultEntity.secrets);
+      return await this.encryptSecrets(privateKey, groupUpdateDryRunResultEntity.neededSecrets, decryptedSecrets);
+    }
+  }
+
+  /**
+   * Encrypt a collection of needed secrets.
+   * @param {openpgp.PrivateKey} privateKey The logged in user private key
+   * @param {NeededSecretsCollection} neededSecretsCollection A collection of needed secret
+   * @param {object} decryptedSecrets The decrypted secrets organized as {[resourceId]: secretDecrypted, ...}
+   * @returns {Promise<GroupUpdateSecretsCollection>}
+   * @private
+   */
+  async encryptSecrets(privateKey, neededSecretsCollection, decryptedSecrets) {
+    this.progressService.finishStep(i18n.t("Synchronizing keyring"), true);
+    const usersPublicKeys = await this.retrieveAndReadUserPublicKeys(neededSecretsCollection);
+
+    return GroupUpdateSecretsCryptoService.encryptSecrets(
+      privateKey,
+      usersPublicKeys,
+      neededSecretsCollection,
+      decryptedSecrets,
+      (message) => this.progressService.updateStepMessage(message),
+    );
+  }
+
+  /**
+   * Decrypt a collection of secrets
+   * @param {openpgp.PrivateKey} privateKey The logged in user private key
+   * @param {GroupUpdateSecretsCollection} secretsCollection The collection of secrets to decrypt
+   * @returns {Promise<object>} The decrypted secrets organized as {[resourceId]: secretDecrypted, ...}
+   * @private
+   */
+  async decryptSecrets(privateKey, secretsCollection) {
+    return GroupUpdateSecretsCryptoService.decryptSecrets(privateKey, secretsCollection, (message) =>
+      this.progressService.updateStepMessage(message),
+    );
+  }
+
+  /**
+   * Update the group
+   * @param {GroupUpdateEntity} groupUpdateEntity The group update entity
+   * @returns {Promise<void>}
+   * @private
+   */
+  async updateGroup(groupUpdateEntity) {
+    this.progressService.finishStep(i18n.t("Updating group"), true);
+    const groupUpdateSingleOperationList = GroupUpdatesCollection.createFromGroupUpdateEntity(groupUpdateEntity);
+    const operationCount = groupUpdateSingleOperationList.length;
+
+    for (let i = 0; i < operationCount; i++) {
+      const progressMessage =
+        i === 0
+          ? i18n.t("Updating group metadata") //first operation is always the group name update, guaranteed by `createFromGroupUpdateEntity`
+          : i18n.t("Updating group member {{counter}}/{{total}}", { counter: i, total: operationCount - 1 });
+
+      this.progressService.updateStepMessage(progressMessage);
+      const groupUpdateOperation = groupUpdateSingleOperationList.items[i];
+      const groupDto = await this.groupApiService.update(groupUpdateOperation.id, groupUpdateOperation.toDto(), {
+        my_group_user: true,
+      });
+      const updatedGroupEntity = new GroupEntity(groupDto, { ignoreInvalidEntity: true });
+      await this.groupLocalStorage.updateGroup(updatedGroupEntity);
+    }
+  }
+
+  /**
+   * Retrieve the user public keys.
+   * @param {NeededSecretsCollection} neededSecrets The needed secrets
+   * @returns {Promise<object>} User public keys organized in an object where the property name represents the user id,
+   * and the value contains the user public armored key.
+   * @private
+   */
+  async retrieveAndReadUserPublicKeys(neededSecrets) {
+    const userOpenpgpPublicKeys = {};
+    const userIds = [...new Set(neededSecrets.extract("user_id"))];
+    const keyring = new Keyring();
+
+    await keyring.sync();
+
+    for (const userId of userIds) {
+      const publicKey = keyring.findPublic(userId);
+      if (!publicKey) {
+        throw new Error(`The public key of the user (${userId}) could not be found in the local keyring.`);
+      }
+      // Keep armored key to send it through a message for offscreen
+      userOpenpgpPublicKeys[userId] = publicKey.armoredKey;
+    }
+
+    return userOpenpgpPublicKeys;
+  }
+
+  /**
+   * Delegate the decryption and encryption secrets to the offscreen
+   * @param {string} passphrase
+   * @param {GroupUpdateDryRunResultEntity} groupUpdateDryRunResultEntity
+   * @return {Promise<GroupUpdateSecretsCollection>}
+   */
+  async decryptAndEncryptSecretsFromOffscreen(passphrase, groupUpdateDryRunResultEntity) {
+    this.progressService.finishStep(i18n.t("Synchronizing keyring"), true);
+    // User public key are stored in local storage that is not accessible from offscreen
+    const usersPublicKeys = await this.retrieveAndReadUserPublicKeys(groupUpdateDryRunResultEntity.neededSecrets);
+    const groupUpdateSecrets = await RequestAddUsersToGroupOffscreenService.decryptAndEncryptSecrets(
+      this.account,
+      passphrase,
+      groupUpdateDryRunResultEntity,
+      usersPublicKeys,
+      this.progressService,
+    );
+    return new GroupUpdateSecretsCollection(groupUpdateSecrets, { validate: false });
+  }
+}
+
+export default GroupUpdateService;

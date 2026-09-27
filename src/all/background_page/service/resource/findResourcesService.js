@@ -1,0 +1,366 @@
+/**
+ * Passbolt ~ Open source password manager for teams
+ * Copyright (c) Passbolt SA (https://www.passbolt.com)
+ *
+ * Licensed under GNU Affero General Public License version 3 of the or any later version.
+ * For full copyright and license information, please see the LICENSE.txt
+ * Redistributions of files must retain the above copyright notice.
+ *
+ * @copyright     Copyright (c) Passbolt SA (https://www.passbolt.com)
+ * @license       https://opensource.org/licenses/AGPL-3.0 AGPL License
+ * @link          https://www.passbolt.com Passbolt(tm)
+ * @since         4.9.4
+ */
+import ResourceService from "../api/resource/resourceService";
+import ResourceLocalStorage from "../local_storage/resourceLocalStorage";
+import ResourcesCollection from "../../model/entity/resource/resourcesCollection";
+import ExecuteConcurrentlyService from "../execute/executeConcurrentlyService";
+import splitBySize from "../../utils/array/splitBySize";
+import ResourceEntity from "../../model/entity/resource/resourceEntity";
+import DecryptMetadataService from "../metadata/decryptMetadataService";
+import { assertArrayUUID, assertNumber, assertUuid } from "passbolt-styleguide/src/shared/utils/assertions";
+import GetOrFindResourceTypesService from "../resourceType/getOrFindResourceTypesService";
+
+const DEFAULT_PAGE_SIZE = 10_000;
+
+/**
+ * The service aims to find resources from the API.
+ */
+export default class FindResourcesService {
+  /**
+   *
+   * @param {AccountEntity} account The user account
+   * @param {ApiClientOptions} apiClientOptions The api client options
+   */
+  constructor(account, apiClientOptions) {
+    this.account = account;
+    this.resourceService = new ResourceService(apiClientOptions);
+    this.decryptMetadataService = new DecryptMetadataService(apiClientOptions, account);
+    this.getOrFindResourceTypesService = new GetOrFindResourceTypesService(account, apiClientOptions);
+  }
+
+  /**
+   * Find all
+   *
+   * @param {Object} [contains] optional example: {permissions: true}
+   * @param {Object} [filters] optional
+   * @param {boolean?} [ignoreInvalidEntity] Should invalid entities be ignored.
+   * @returns {Promise<ResourcesCollection>}
+   * @private
+   */
+  async findAll(contains, filters, ignoreInvalidEntity = false) {
+    this.assertContains(contains);
+    this.assertFilters(filters);
+
+    const response = await this.resourceService.findAll(contains, filters);
+    const resourcesDto = response.body;
+    return new ResourcesCollection(resourcesDto, { clone: false, ignoreInvalidEntity: ignoreInvalidEntity });
+  }
+
+  /**
+   * Find all resources of a page
+   *
+   * @param {Object} [contains] optional example: {permissions: true}
+   * @param {Object} [filters] optional
+   * @param {Object} [pageOptions] optional
+   * @param {boolean?} [ignoreInvalidEntity] Should invalid entities be ignored.
+   * @returns {Promise<PassboltResponseEntity>}
+   * @private
+   */
+  async findAllPaginated(contains, filters, pageOptions) {
+    this.assertContains(contains);
+    this.assertFilters(filters);
+    this.assertPageOptions(pageOptions);
+
+    return await this.resourceService.findAll(contains, filters, pageOptions);
+  }
+
+  /**
+   * Find all by ids
+   * @param {Object} contains
+   * @param {Array<string>} resourcesIds
+   * @returns {Promise<ResourcesCollection>}
+   */
+  async findAllByIds(resourcesIds, contains = {}, ignoreInvalidEntity = false) {
+    assertArrayUUID(resourcesIds);
+
+    // We split the requests in chunks in order to avoid any too long url error.
+    const resourcesIdsChunks = splitBySize(resourcesIds, 80);
+    const callbacks = resourcesIdsChunks.map((resourceIds) => {
+      const filter = {
+        "has-id": resourceIds,
+      };
+      return async () => await this.findAll(contains, filter, ignoreInvalidEntity);
+    });
+
+    // @todo Later (tm). The Collection should provide this capability, ensuring that validation build rules are executed and performance is guaranteed.
+    const executeConcurrentlyService = new ExecuteConcurrentlyService();
+    const arrayOfCollection = await executeConcurrentlyService.execute(callbacks, 5);
+    const resourcesCollection = new ResourcesCollection();
+
+    arrayOfCollection.forEach((collection) => {
+      resourcesCollection._items = resourcesCollection._items.concat(collection._items);
+    });
+    return resourcesCollection;
+  }
+
+  /**
+   * Retrieve all resources for the local storage.
+   * @returns {Promise<ResourcesCollection>}
+   */
+  async findAllForLocalStorage() {
+    const pageOptions = {
+      limit: DEFAULT_PAGE_SIZE,
+      page: 1,
+      sorts: {
+        "Resources.modified": "desc",
+      },
+    };
+
+    const firstResponse = await this.findAllPaginated(ResourceLocalStorage.DEFAULT_CONTAIN, null, pageOptions);
+    /** @type {Array<Object>} */
+    let resourcesCollectionDto = firstResponse.body;
+
+    const pageCount = firstResponse.header.pagination.pageCount;
+    for (let i = 2; i <= pageCount; i++) {
+      pageOptions.page = i;
+      const response = await this.findAllPaginated(ResourceLocalStorage.DEFAULT_CONTAIN, null, pageOptions);
+      resourcesCollectionDto.push(...response.body);
+    }
+
+    return new ResourcesCollection(resourcesCollectionDto, { ignoreInvalidEntity: true });
+  }
+
+  /**
+   * Retrieve all resources shared with group for the local storage.
+   * @param {string} groupId The group id to filter the resources with.
+   * @param {string|null} [passphrase = null] The passphrase to use to decrypt the metadata. Marked as optional as it
+   * might be available in the passphrase session storage.
+   * @returns {Promise<ResourcesCollection>}
+   */
+  async findAllByIsSharedWithGroupForLocalStorage(groupId) {
+    const resources = await this.findAll(
+      ResourceLocalStorage.DEFAULT_CONTAIN,
+      { "is-shared-with-group": groupId },
+      true,
+    );
+    const resourceTypes = await this.getOrFindResourceTypesService.getOrFindAll();
+    resources.filterByResourceTypes(resourceTypes);
+
+    return resources;
+  }
+
+  /**
+   * Retrieve all resources by ids for sharing.
+   * @param {Array<string>} resourcesIds The resource ids to retrieve.
+   * @returns {Promise<ResourcesCollection>}
+   */
+  async findAllByIdsForShare(resourcesIds) {
+    assertArrayUUID(resourcesIds);
+
+    const contains = {
+      secret: true,
+    };
+    const resources = await this.findAllByIds(resourcesIds, contains);
+    await this.decryptMetadataService.decryptAllFromForeignModels(resources);
+
+    return resources;
+  }
+
+  /**
+   * Retrieve all resources by ids for offline.
+   * @param {Array<string>} resourcesIds The resource ids to retrieve.
+   * @returns {Promise<ResourcesCollection>}
+   */
+  async findAllByIdsForOffline(resourcesIds) {
+    assertArrayUUID(resourcesIds);
+
+    const contains = {
+      secret: true,
+    };
+
+    return await this.findAllByIds(resourcesIds, contains, true);
+  }
+
+  /**
+   * Retrieve resources by ids with their permissions (embedding each permission's user profile or
+   * group), tailored for the share process. The metadata is intentionally not requested nor
+   * decrypted, so no passphrase prompt is triggered.
+   * @param {Array<string>} resourcesIds The resource ids to retrieve.
+   * @returns {Promise<ResourcesCollection>}
+   */
+  async findAllPermissionsByIdsForShare(resourcesIds) {
+    assertArrayUUID(resourcesIds);
+
+    const contains = {
+      "permissions.user.profile": true,
+      "permissions.group": true,
+    };
+
+    return this.findAllByIds(resourcesIds, contains);
+  }
+
+  /**
+   * Retrieve all resources by ids with permissions.
+   * @param {Array<string>} resourcesIds The resource ids to retrieve.
+   * @returns {Promise<ResourcesCollection>}
+   */
+  async findAllByIdsWithPermissions(resourcesIds) {
+    assertArrayUUID(resourcesIds);
+
+    const contains = {
+      permission: true,
+      permissions: true,
+    };
+
+    return this.findAllByIds(resourcesIds, contains);
+  }
+
+  /**
+   * Find all resources for decrypt
+   *
+   * @param {array} resourcesIds resources uuids
+   * @returns {Promise<ResourcesCollection>}
+   */
+  async findAllForDecrypt(resourcesIds) {
+    assertArrayUUID(resourcesIds);
+
+    const contains = { secret: true };
+    const resourceCollection = await this.findAllByIds(resourcesIds, contains);
+
+    return resourceCollection;
+  }
+
+  /**
+   * Find a resource given an id
+   *
+   * @param {string} resourceId resource id
+   * @param {Object} [contains] optional example: {permissions: true}
+   * @returns {Promise<ResourceEntity>}
+   */
+  async findOneById(resourceId, contains = {}) {
+    assertUuid(resourceId);
+    this.assertContains(contains);
+
+    const resourcesDto = await this.resourceService.get(resourceId, contains);
+
+    return new ResourceEntity(resourcesDto);
+  }
+
+  /**
+   * Find the resource detail given an id
+   *
+   * @param {string} resourceId resource id
+   * @returns {Promise<ResourceEntity>}
+   */
+  async findOneByIdForDetails(resourceId) {
+    assertUuid(resourceId);
+
+    const contains = {
+      creator: true,
+      modifier: true,
+    };
+
+    const resource = this.findOneById(resourceId, contains);
+    return resource;
+  }
+
+  /**
+   * Find the resource for offline given an id
+   *
+   * @param {string} resourceId resource id
+   * @returns {Promise<ResourceEntity>}
+   */
+  async findOneByIdForOffline(resourceId) {
+    assertUuid(resourceId);
+
+    const contains = {
+      secret: true,
+      ...ResourceLocalStorage.DEFAULT_CONTAIN,
+    };
+
+    return this.findOneById(resourceId, contains);
+  }
+
+  /**
+   * Find all the resources matching the given ids for the local storage.
+   * All entities that cannot be validated will be ignored and excluded from the resulting collection.
+   * @param {Array<uuid>} resourceIds
+   * @returns {Promise<ResourcesCollection>}
+   */
+  async findAllByIdsForLocalStorage(resourceIds) {
+    assertArrayUUID(resourceIds);
+    return await this.findAllByIds(resourceIds, ResourceLocalStorage.DEFAULT_CONTAIN, true);
+  }
+
+  /**
+   * Find all the resources having the given parentFolderId as direct ancestor for the local storage
+   * All entities that cannot be validated will be ignored and excluded from the resulting collection.
+   * @param {uuid} parentFolderId
+   * @returns {Promise<ResourcesCollection>}
+   */
+  async findAllByParentFolderIdForLocalStorage(parentFolderId) {
+    assertUuid(parentFolderId);
+    const filters = { "has-parent": parentFolderId };
+    return await this.findAll(ResourceLocalStorage.DEFAULT_CONTAIN, filters, true);
+  }
+
+  /**
+   * Assert the contains to ensure they match the supported ones.
+   * @param {object} contains
+   * @private
+   */
+  assertContains(contains) {
+    const supportedOptions = ResourceService.getSupportedContainOptions();
+    if (contains && !Object.keys(contains).every((option) => supportedOptions.includes(option))) {
+      throw new Error("Unsupported contains parameter used, please check supported contains");
+    }
+  }
+
+  /**
+   * Assert the filters to ensure they match the supported ones.
+   * @param {object} filters
+   * @private
+   */
+  assertFilters(filters) {
+    const supportedFilter = ResourceService.getSupportedFiltersOptions();
+    if (filters && !Object.keys(filters).every((filter) => supportedFilter.includes(filter))) {
+      throw new Error("Unsupported filter parameter used, please check supported filters");
+    }
+  }
+
+  /**
+   * Assert the pageOptions.
+   * @param {object} pageOptions
+   * @private
+   * @throws {Error} if the 'limit' field is not a valid integer or is less than 1
+   * @throws {Error} if the 'page' field is not a valid integer or is less than 1 and if it is set without 'limit'
+   * @throws {Error} if the 'sorts' field refers to unsupported sortable fields
+   */
+  assertPageOptions(pageOptions) {
+    const { limit, page, sorts } = pageOptions;
+
+    if (limit) {
+      assertNumber(limit);
+      if (limit < 1) {
+        throw new Error("The 'limit' parameter must be an integer greater or equal to 1");
+      }
+    }
+
+    if (page) {
+      assertNumber(page);
+      if (page < 1) {
+        throw new Error("The 'page' parameter must be an integer greater or equal to 1");
+      }
+      if (!limit) {
+        throw new Error("The 'page' parameter must be set along with the 'limit' parameter");
+      }
+    }
+
+    const sortFields = Object.keys(sorts || {});
+    const supportedPageOptions = ResourceService.getSupportedSortsOptions();
+    if (sortFields && !sortFields.every((sortField) => supportedPageOptions.includes(sortField))) {
+      throw new Error("Unsupported sort field used, please check supported sort fields");
+    }
+  }
+}

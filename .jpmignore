@@ -1,0 +1,26 @@
+# Ignore .DS_Store files created by mac
+.DS_Store
+
+# Ignore any zip or xpi files
+*.zip
+*.xpi
+
+# Ignore grunt and bower working directory
+/node_modules
+/bower_components
+/test
+.git
+.bowerrc
+.gitignore
+.jpmignore
+.npmignore
+.idea
+locale/empty
+/data/less
+Gruntfile.js
+CHANGELOG.MD
+README.MD
+npm-debug.log
+
+#jest test coverage
+/coverage
