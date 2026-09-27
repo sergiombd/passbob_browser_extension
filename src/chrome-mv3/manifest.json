@@ -5,6 +5,7 @@
   "version": "5.16.1",
   "description": "__MSG_appDescription__",
   "default_locale": "en",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA5j9NK0Lx47zZwYoFn5vCdWftTFCg2R/W9indQSUnoAaGcXofDlroYgF0vnxF6/M3BKUwSwqlOSovxA75wruHZtnv+zCWdpoQHAsl6eD+Czm4rHKFsgjwpnxnbWB4EQEO0Wu5XQ48jwXQGtyDL+GqQk4oE34EelknIMvSt5wTbb68hfpWj2vsybxMsOQZc0sJKs/8U7YQgUzeFHbXEtg+NKyxYUswj1eDU29Pgb9A9jguKsjJPfO75e9J5y2zGjjPimMKFNErgmUeZ0qM0lFE4sm9dAaPQRxbPSv2gK5iPzx98SUCshSIO2Upc5WLakkirR/f0c6xvX4f5u1whVMwIQIDAQAB",
   "minimum_chrome_version": "116",
   "externally_connectable": {
     "ids": []
