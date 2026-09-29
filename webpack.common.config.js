@@ -98,7 +98,7 @@ const buildSharedExtraPlugins = () => [
       { from: themeCss, context: styleguidePath('build/css/themes/solarized_light'), to: warBuildPath('css/themes/solarized_light') },
       { from: themeCss, context: styleguidePath('build/css/themes/solarized_dark'), to: warBuildPath('css/themes/solarized_dark') },
       {
-        from: '{opensans-variable-font.ttf,opensans-italic-variable-font.ttf,obfuscation-regular.otf,inconsolata-regular.ttf}',
+        from: '{opensans-variable-font.ttf,opensans-italic-variable-font.ttf,obfuscation-regular.otf,inconsolata-regular.ttf,geist-variable.woff2,geist-mono-variable.woff2,geist-OFL.txt}',
         context: styleguidePath('src/fonts'),
         to: warBuildPath('fonts'),
       },
