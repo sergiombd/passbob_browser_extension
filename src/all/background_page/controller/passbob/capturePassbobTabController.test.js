@@ -6,9 +6,9 @@
  *
  * @license       https://opensource.org/licenses/AGPL-3.0 AGPL License
  */
-import CapturePassbobTabController from "./capturePassbobTabController";
+import CapturePassbobTabController, { CAPTURE_OPTIONS, MAX_SCREENSHOT_LENGTH } from "./capturePassbobTabController";
 
-const SCREENSHOT = "data:image/png;base64,iVBORw0KGgo=";
+const SCREENSHOT = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -24,7 +24,7 @@ describe("CapturePassbobTabController", () => {
 
     expect(dataUrl).toBe(SCREENSHOT);
     expect(browser.tabs.query).toHaveBeenCalledWith({ active: true, currentWindow: true });
-    expect(browser.tabs.captureVisibleTab).toHaveBeenCalledWith(7, { format: "png" });
+    expect(browser.tabs.captureVisibleTab).toHaveBeenCalledWith(7, CAPTURE_OPTIONS);
   });
 
   it("captures the window of the tab the quickaccess was opened from", async () => {
@@ -36,7 +36,7 @@ describe("CapturePassbobTabController", () => {
 
     await controller.exec(4);
 
-    expect(browser.tabs.captureVisibleTab).toHaveBeenCalledWith(9, { format: "png" });
+    expect(browser.tabs.captureVisibleTab).toHaveBeenCalledWith(9, CAPTURE_OPTIONS);
   });
 
   it("refuses a tab that is not visible, the screenshot would show another page", async () => {
@@ -45,6 +45,18 @@ describe("CapturePassbobTabController", () => {
 
     await expect(controller.exec(4)).rejects.toThrow("visible tab");
     expect(browser.tabs.captureVisibleTab).not.toHaveBeenCalled();
+  });
+
+  it("captures a JPEG, a PNG of a large screen is too big for the port", () => {
+    expect(CAPTURE_OPTIONS.format).toBe("jpeg");
+  });
+
+  it("refuses a screenshot too large to send back", async () => {
+    jest.spyOn(browser.tabs, "query").mockImplementation(async () => [{ id: 3, windowId: 7, active: true }]);
+    browser.tabs.captureVisibleTab.mockImplementation(async () => "x".repeat(MAX_SCREENSHOT_LENGTH + 1));
+    const controller = new CapturePassbobTabController();
+
+    await expect(controller.exec(null)).rejects.toThrow("too large");
   });
 
   it("refuses when the tab cannot be found", async () => {

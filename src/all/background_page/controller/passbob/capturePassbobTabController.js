@@ -8,6 +8,13 @@
  */
 import BrowserTabService from "../../service/ui/browserTab.service";
 
+/**
+ * A JPEG keeps the screenshot small enough for the port (a PNG of a large screen can exceed the message size limit and
+ * disconnect it), at a quality the QR code decoder still reads.
+ */
+export const CAPTURE_OPTIONS = { format: "jpeg", quality: 92 };
+export const MAX_SCREENSHOT_LENGTH = 32 * 1024 * 1024;
+
 class CapturePassbobTabController {
   /**
    * @param {Worker} worker The worker
@@ -37,7 +44,7 @@ class CapturePassbobTabController {
    * Take a screenshot of the visible part of the page the quickaccess is used on, to read a QR code from it.
    * The screenshot is only returned to the quickaccess, it is never stored.
    * @param {number|null} tabId The tab the quickaccess was opened from, the current tab if none
-   * @returns {Promise<string>} The screenshot as a PNG data URL
+   * @returns {Promise<string>} The screenshot as a JPEG data URL
    * @throws {Error} If the tab cannot be found or is not the visible tab of its window
    */
   async exec(tabId) {
@@ -48,7 +55,11 @@ class CapturePassbobTabController {
     if (!tab.active) {
       throw new Error("The page to scan must be the visible tab of its window.");
     }
-    return browser.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+    const dataUrl = await browser.tabs.captureVisibleTab(tab.windowId, CAPTURE_OPTIONS);
+    if (dataUrl.length > MAX_SCREENSHOT_LENGTH) {
+      throw new Error("The screenshot of the page is too large.");
+    }
+    return dataUrl;
   }
 }
 
