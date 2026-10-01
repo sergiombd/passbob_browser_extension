@@ -13,6 +13,8 @@
  */
 
 (function () {
+  const PASSBOB_DEFAULT_THEME_FILES = ["ext_quickaccess.min.css"];
+
   class Stylesheet {
     constructor() {
       this.bindCallbacks();
@@ -52,8 +54,10 @@
       }
 
       const cssFile = cssInfoTag.dataset.file;
+      // Passbob: the quickaccess has its own look, light or dark as the OS, in the default theme only.
+      const theme = PASSBOB_DEFAULT_THEME_FILES.includes(cssFile) ? "default" : this.theme;
 
-      this.getLinkTag().setAttribute("href", `/webAccessibleResources/css/themes/${this.theme}/${cssFile}`);
+      this.getLinkTag().setAttribute("href", `/webAccessibleResources/css/themes/${theme}/${cssFile}`);
     }
 
     /**
