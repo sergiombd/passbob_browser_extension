@@ -8,6 +8,91 @@
 	(c) 2026 Passbolt SA
 	https://www.passbolt.com
 
+# Passbob
+
+Passbob is a fork of the Passbolt browser extension (see [NOTICE-PASSBOB.md](NOTICE-PASSBOB.md)). It works with your
+existing Passbolt server and account: nothing changes on the server. Its UI comes from
+[sergiombd/passbob_styleguide](https://github.com/sergiombd/passbob_styleguide).
+
+## Use it next to an existing Passbolt
+
+- **Same server, same account.** Passbob talks to your usual Passbolt server. You sign in with your usual private key
+  and passphrase.
+- **Its own setup, once.** Passbob is a separate extension (ID `jfmkbnjehnikpghgclojmgcanocibpid`), so it cannot see the
+  account stored by the official extension. Set it up once with the account recovery (see
+  [First launch](#first-launch)). Keep your private key file and passphrase at hand.
+- **One extension at a time on the Passbolt site.** Both extensions inject into the Passbolt pages and the in-form
+  icons of websites. Turn the official extension off in `chrome://extensions` (it stays installed with its account),
+  and turn it back on whenever you want to switch back.
+- **Update in place, never remove.** Removing Passbob deletes its account from the browser. To update, replace the
+  files in the same folder and click ↻ on the Passbob card. The ID stays the same, so the account and settings stay.
+
+## Install from a release
+
+Releases are on the [Releases page](https://github.com/sergiombd/passbob_browser_extension/releases), one zip per
+browser (`passbob-chrome-<version>.zip`, `passbob-firefox-<version>.zip`).
+
+**Chrome, Edge, Brave**
+1. Download `passbob-chrome-<version>.zip` and unzip it into a folder you keep, for example `~/.extensions/passbob`.
+2. Open `chrome://extensions` and turn on **Developer mode**.
+3. Click **Load unpacked** and pick that folder.
+4. Turn off the official Passbolt extension, then go to [First launch](#first-launch).
+
+To update, unzip the new release over the same folder, then click ↻ on the Passbob card.
+
+**Firefox** (the builds are not signed yet, so the add-on is removed when Firefox restarts)
+1. Download `passbob-firefox-<version>.zip` and unzip it.
+2. Open `about:debugging#/runtime/this-firefox`, click **Load Temporary Add-on…** and pick its `manifest.json`.
+
+## Install from the repositories
+
+You need access to both repositories, Node 22 (see `.nvmrc`) and npm.
+
+1. Clone both repositories side by side. The build looks for them under their upstream names, so clone them as such:
+
+   ```bash
+   mkdir passbob && cd passbob
+   git clone https://github.com/sergiombd/passbob_styleguide.git passbolt_styleguide
+   git clone https://github.com/sergiombd/passbob_browser_extension.git passbolt_browser_extension
+   ```
+
+   For a feature branch, check out the branch of the same name in both repositories.
+2. Install and build the styleguide (it builds the theme CSS the extension copies):
+
+   ```bash
+   cd passbolt_styleguide
+   npm ci
+   npm run build
+   ```
+3. Install and build the extension for Chrome:
+
+   ```bash
+   cd ../passbolt_browser_extension
+   npm ci
+   npm run build:chromium-mv3
+   ```
+
+   The unpacked extension is in `build/all`, and a zip in `dist/chromium-mv3`. For Firefox, run
+   `npm run build:firefox` and use the zip in `dist/firefox` (both builds write to `build/all`).
+4. Copy `build/all` into the folder Chrome loads, for example:
+
+   ```bash
+   rsync -a --delete build/all/ ~/.extensions/passbob/
+   ```
+
+   Then load it as in [Install from a release](#install-from-a-release) the first time, or click ↻ on the Passbob card
+   for an update. Loading `build/all` itself also works, but a later `npm ci` or a Firefox build replaces it.
+
+## First launch
+
+1. With the official Passbolt extension turned off, open `https://<your Passbolt server>/users/recover`.
+2. Enter your email, accept the terms and click **Next**. Passbolt emails you a recovery link.
+3. Open the link in the same browser. Passbob opens its recovery screen: import your private key file and enter your
+   passphrase.
+4. Open your Passbolt server: the vault shows. The Passbob toolbar popup lists your passwords.
+
+If the popup only shows an empty square, Passbob has no account yet: do the recovery above.
+
 ## License
 
 Passbolt - Open source password manager for teams
