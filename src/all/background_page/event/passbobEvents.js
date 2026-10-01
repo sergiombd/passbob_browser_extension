@@ -9,6 +9,7 @@
 import SavePassbobDraftController from "../controller/passbob/savePassbobDraftController";
 import GetPassbobDraftController from "../controller/passbob/getPassbobDraftController";
 import PassbobDraftService from "../service/passbob/passbobDraftService";
+import CapturePassbobTabController from "../controller/passbob/capturePassbobTabController";
 
 const listen = function (worker, apiClientOptions, account) {
   /*
@@ -33,6 +34,18 @@ const listen = function (worker, apiClientOptions, account) {
   worker.port.on("passbob.draft.get", async (requestId, pathname) => {
     const controller = new GetPassbobDraftController(worker, requestId, account);
     await controller._exec(pathname);
+  });
+
+  /*
+   * Take a screenshot of the page the quickaccess is used on, to scan a QR code.
+   *
+   * @listens passbob.tab.capture-visible
+   * @param {string} requestId The request identifier
+   * @param {number|null} tabId The tab the quickaccess was opened from, the current tab if none
+   */
+  worker.port.on("passbob.tab.capture-visible", async (requestId, tabId) => {
+    const controller = new CapturePassbobTabController(worker, requestId);
+    await controller._exec(tabId);
   });
 
   /*
