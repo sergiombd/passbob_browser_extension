@@ -1,10 +1,10 @@
 {
   "appName": {
-    "message": "Passbob - Passbolt client (fork)",
+    "message": "Passbob",
     "description": "The application name of the extension, displayed in the web store. 45 characters max."
   },
   "appDescription": {
-    "message": "Passbob: a friendlier fork of the Passbolt browser extension.",
+    "message": "Unofficial client for Passbolt servers. Not affiliated with Passbolt SA.",
     "description": "The description of the extension, displayed in the web store. 85 characters max."
   }
 }
