@@ -16,6 +16,7 @@
  * with each child via webpack-merge: arrays (plugins, module.rules) concat,
  * objects (optimization, resolve) deep-merge.
  */
+const path = require('path');
 const { browserPolyfillPlugin, babelRule, splitChunksConfig } = require('./common-blocks');
 
 const isDevelopment = process.env.NODE_ENV === "development";
@@ -26,6 +27,17 @@ module.exports = {
   plugins: [browserPolyfillPlugin],
   module: {
     rules: [babelRule],
+  },
+  resolve: {
+    alias: {
+      /*
+       * xregexp's default ("browser") build is transpiled with @babel/runtime-corejs3, which bundles
+       * core-js-pure polyfills for legacy browsers (ActiveXObject / document.write fallbacks). Once
+       * minified, the Chrome Web Store review flags them as obfuscated code. The ES module sources
+       * have no polyfill and run as is on every supported browser.
+       */
+      'xregexp$': path.resolve(__dirname, '../node_modules/xregexp/src/index.js'),
+    },
   },
   optimization: {
     splitChunks: splitChunksConfig,
